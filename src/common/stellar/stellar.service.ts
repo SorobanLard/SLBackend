@@ -33,6 +33,11 @@ export class StellarService implements OnModuleInit {
   private networkPassphrase: string;
   private contractId: string;
 
+  /** Number of attempts for RPC calls before giving up (retry-with-backoff). */
+  private readonly maxAttempts = 3;
+  /** Base delay (ms) for exponential backoff between retries. */
+  private readonly baseRetryDelayMs = 500;
+
   constructor(private readonly config: ConfigService) {}
 
   async onModuleInit() {
@@ -56,8 +61,40 @@ export class StellarService implements OnModuleInit {
   getNetworkPassphrase(): string       { return this.networkPassphrase; }
   getContractId(): string              { return this.contractId; }
 
+  /**
+   * Execute an RPC operation with retry-with-backoff.
+   *
+   * Retries up to `maxAttempts` times with exponential backoff. On exhausted
+   * retries the last error is rethrown so callers (e.g. certificate issuance)
+   * can persist a PENDING/FAILED state instead of failing silently.
+   */
+  private async withRetry<T>(label: string, fn: () => Promise<T>): Promise<T> {
+    let lastError: any;
+    for (let attempt = 1; attempt <= this.maxAttempts; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error;
+        if (attempt < this.maxAttempts) {
+          const delay = this.baseRetryDelayMs * 2 ** (attempt - 1);
+          this.logger.warn(
+            `${label} failed (attempt ${attempt}/${this.maxAttempts}), retrying in ${delay}ms: ${error?.message}`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        } else {
+          this.logger.error(
+            `${label} failed after ${this.maxAttempts} attempts: ${error?.message}`,
+          );
+        }
+      }
+    }
+    throw lastError;
+  }
+
   async getLatestLedger(): Promise<number> {
-    const info = await this.rpcClient.getLatestLedger();
+    const info = await this.withRetry('getLatestLedger', () =>
+      this.rpcClient.getLatestLedger(),
+    );
     return info.sequence;
   }
 
@@ -73,16 +110,18 @@ export class StellarService implements OnModuleInit {
     startLedger: number,
   ): Promise<SorobanRpc.Api.EventResponse[]> {
     try {
-      const result = await this.rpcClient.getEvents({
-        startLedger,
-        filters: [
-          {
-            type: 'contract',
-            contractIds: [this.contractId],
-          },
-        ],
-        limit: 100,
-      });
+      const result = await this.withRetry('fetchContractEvents', () =>
+        this.rpcClient.getEvents({
+          startLedger,
+          filters: [
+            {
+              type: 'contract',
+              contractIds: [this.contractId],
+            },
+          ],
+          limit: 100,
+        }),
+      );
       return result.events ?? [];
     } catch (error) {
       this.logger.error(`Failed to fetch events from ledger ${startLedger}`, error.message);
@@ -97,6 +136,9 @@ export class StellarService implements OnModuleInit {
   /**
    * Simulate a read-only contract call — no gas, no signing.
    * Used to check on-chain state (is_enrolled, verify_certificate).
+   *
+   * Retries with backoff on RPC timeouts/downtime; rethrows on exhausted
+   * retries so callers can react (e.g. mark certificate issuance FAILED).
    */
   async simulateCall(method: string, args: xdr.ScVal[]): Promise<any> {
     try {
@@ -116,7 +158,9 @@ export class StellarService implements OnModuleInit {
         .setTimeout(30)
         .build();
 
-      const simulation = await this.rpcClient.simulateTransaction(tx);
+      const simulation = await this.withRetry(`simulateCall(${method})`, () =>
+        this.rpcClient.simulateTransaction(tx),
+      );
       if (SorobanRpc.Api.isSimulationError(simulation)) {
         throw new Error(`Simulation error: ${simulation.error}`);
       }
@@ -162,7 +206,9 @@ export class StellarService implements OnModuleInit {
     txHash: string,
   ): Promise<{ status: string; successful: boolean } | null> {
     try {
-      const result = await this.rpcClient.getTransaction(txHash);
+      const result = await this.withRetry(`getTransactionStatus(${txHash})`, () =>
+        this.rpcClient.getTransaction(txHash),
+      );
       return {
         status: result.status,
         successful: result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS,

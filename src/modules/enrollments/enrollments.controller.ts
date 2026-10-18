@@ -1,5 +1,6 @@
 import {
   Controller, Get, Post, Body, Param, UseGuards, HttpCode, HttpStatus, Query,
+  ConflictException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { EnrollmentsService } from './enrollments.service';
@@ -20,13 +21,24 @@ export class EnrollmentsController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Register on-chain enrollment in the DB' })
-  create(
+  async create(
     @CurrentUser('id') studentId: string,
     @Body() body: { courseId: string; txHash: string; amountPaid: number },
   ) {
-    return this.enrollmentsService.create(
-      studentId, body.courseId, body.txHash, body.amountPaid,
-    );
+    try {
+      return await this.enrollmentsService.create(
+        studentId, body.courseId, body.txHash, body.amountPaid,
+      );
+    } catch (error) {
+      // Concurrent duplicate enrollment attempts race past the pre-check and
+      // hit the @@unique([userId, courseId]) constraint (Prisma P2002).
+      if (error?.code === 'P2002') {
+        throw new ConflictException(
+          'You are already enrolled in this course',
+        );
+      }
+      throw error;
+    }
   }
 
   @Get('my')

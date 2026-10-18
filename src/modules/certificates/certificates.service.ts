@@ -2,6 +2,7 @@ import {
   Injectable, NotFoundException, ForbiddenException, Logger,
   BadRequestException,
 } from '@nestjs/common';
+import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -10,6 +11,11 @@ import { NotificationType } from '@prisma/client';
 import { CertificateRenderData } from './certificate-template.types';
 import { v4 as uuidv4 } from 'uuid';
 import { CertificatePdfService } from '../certificates/certificate-pdf.service';
+
+/** Max attempts for on-chain issuance before marking the certificate FAILED. */
+const MAX_ISSUANCE_ATTEMPTS = 3;
+/** Base delay (ms) for exponential backoff between issuance attempts. */
+const ISSUANCE_BACKOFF_BASE_MS = 500;
 
 @Injectable()
 export class CertificatesService {
@@ -98,6 +104,11 @@ export class CertificatesService {
 
     this.logger.log(`Certificate issued: ${certificateId} for student ${studentId}, PDF: ${pdfUrl}`);
 
+    // Trigger on-chain issuance with retry/backoff. On exhausted retries the
+    // certificate is persisted as FAILED so the scheduled job can retry it
+    // instead of leaving the course complete with no certificate.
+    await this.attemptOnChainIssuance(certificateId);
+
     await this.notifications.notifyUser(
       studentId,
       NotificationType.CERTIFICATE_ISSUED,
@@ -109,11 +120,73 @@ export class CertificatesService {
     return updatedCert;
   }
 
+  /**
+   * Attempt on-chain issuance with retry-with-backoff. Persists the issuance
+   * state (PENDING/FAILED/ISSUED) on the certificate record so transient
+   * Stellar RPC downtime never silently drops a certificate.
+   */
+  private async attemptOnChainIssuance(certificateId: string): Promise<void> {
+    await this.prisma.certificate.update({
+      where: { id: certificateId },
+      data: { issuanceStatus: 'PENDING', issuanceAttempts: 0, lastIssuanceError: null },
+    });
+
+    for (let attempt = 1; attempt <= MAX_ISSUANCE_ATTEMPTS; attempt++) {
+      try {
+        await this.stellar.issueCertificateOnChain(certificateId);
+        await this.prisma.certificate.update({
+          where: { id: certificateId },
+          data: { issuanceStatus: 'ISSUED', issuanceAttempts: attempt, lastIssuanceError: null },
+        });
+        this.logger.log(`On-chain issuance succeeded for ${certificateId} (attempt ${attempt})`);
+        return;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `On-chain issuance attempt ${attempt}/${MAX_ISSUANCE_ATTEMPTS} failed for ${certificateId}: ${message}`,
+        );
+
+        if (attempt < MAX_ISSUANCE_ATTEMPTS) {
+          const delay = ISSUANCE_BACKOFF_BASE_MS * 2 ** (attempt - 1);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        } else {
+          await this.prisma.certificate.update({
+            where: { id: certificateId },
+            data: { issuanceStatus: 'FAILED', issuanceAttempts: attempt, lastIssuanceError: message },
+          });
+          this.logger.error(
+            `On-chain issuance exhausted retries for ${certificateId}; marked FAILED for scheduled retry`,
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Scheduled job that retries certificates whose on-chain issuance is still
+   * PENDING or has FAILED, so transient Stellar RPC downtime self-heals.
+   */
+  @Cron(CronExpression.EVERY_5_MINUTES)
+  async retryPendingIssuances(): Promise<void> {
+    const pending = await this.prisma.certificate.findMany({
+      where: { issuanceStatus: { in: ['PENDING', 'FAILED'] }, isRevoked: false },
+      select: { id: true },
+      take: 50,
+    });
+
+    if (pending.length === 0) return;
+    this.logger.log(`Retrying on-chain issuance for ${pending.length} certificate(s)`);
+
+    for (const { id } of pending) {
+      await this.attemptOnChainIssuance(id);
+    }
+  }
+
   /** Update the txHash after the admin calls issue_certificate() on-chain */
   async updateTxHash(certificateId: string, txHash: string) {
     return this.prisma.certificate.update({
       where: { id: certificateId },
-      data: { txHash },
+      data: { txHash, issuanceStatus: 'ISSUED' },
     });
   }
 

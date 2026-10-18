@@ -1,4 +1,5 @@
 import { ArgumentsHost, HttpException, HttpStatus } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import * as Sentry from '@sentry/node';
 import { HttpExceptionFilter } from './http-exception.filter';
 import { initializeSentry, scrubSentryEvent } from '../logging/sentry';
@@ -28,6 +29,12 @@ describe('HttpExceptionFilter', () => {
     }),
   } as unknown as ArgumentsHost;
 
+  const prismaError = (code: string) =>
+    new Prisma.PrismaClientKnownRequestError('prisma failure', {
+      code,
+      clientVersion: 'test',
+    });
+
   beforeEach(() => {
     jest.clearAllMocks();
   });
@@ -55,6 +62,43 @@ describe('HttpExceptionFilter', () => {
     filter.catch(new HttpException('Not found', HttpStatus.NOT_FOUND), host);
 
     expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('maps Prisma P2002 unique violations to 409 Conflict', () => {
+    filter.catch(prismaError('P2002'), host);
+
+    expect(response.status).toHaveBeenCalledWith(HttpStatus.CONFLICT);
+    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: HttpStatus.CONFLICT,
+    }));
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('maps Prisma P2025 record-not-found to 404 Not Found', () => {
+    filter.catch(prismaError('P2025'), host);
+
+    expect(response.status).toHaveBeenCalledWith(HttpStatus.NOT_FOUND);
+    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: HttpStatus.NOT_FOUND,
+    }));
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('maps Prisma P2003 foreign-key violations to 400 Bad Request', () => {
+    filter.catch(prismaError('P2003'), host);
+
+    expect(response.status).toHaveBeenCalledWith(HttpStatus.BAD_REQUEST);
+    expect(response.json).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: HttpStatus.BAD_REQUEST,
+    }));
+    expect(Sentry.captureException).not.toHaveBeenCalled();
+  });
+
+  it('does not leak Prisma stack traces in mapped responses', () => {
+    filter.catch(prismaError('P2002'), host);
+
+    const body = (response.json as jest.Mock).mock.calls[0][0];
+    expect(JSON.stringify(body)).not.toMatch(/prisma failure/);
   });
 
   it('scrubs secrets and query strings from events before sending', () => {
