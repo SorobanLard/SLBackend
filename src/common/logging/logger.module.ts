@@ -3,6 +3,7 @@ import { Module } from '@nestjs/common';
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
+import { AsyncLocalStorage } from 'async_hooks';
 
 const VALID_LOG_LEVELS = ['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'];
 
@@ -26,6 +27,17 @@ const REDACTED_PATHS = [
   '*.twoFactorSecret',
   '*.twoFactorRecoveryCodes',
 ];
+
+/**
+ * Request-scoped store that carries the correlation ID across async boundaries
+ * (services, queue enqueues, Sentry captures) without threading it manually.
+ */
+export const correlationIdStorage = new AsyncLocalStorage<{ correlationId: string }>();
+
+/** Returns the correlation ID of the current request, if any. */
+export function getCorrelationId(): string | undefined {
+  return correlationIdStorage.getStore()?.correlationId;
+}
 
 function resolveLogLevel(config: ConfigService, nodeEnv: string): string {
   const defaultLevel = nodeEnv === 'production' ? 'info' : 'debug';
@@ -63,6 +75,9 @@ function resolveLogLevel(config: ConfigService, nodeEnv: string): string {
               return correlationId;
             },
             customProps: (req: any) => ({ correlationId: req.id }),
+            // Run the rest of the request lifecycle inside the correlation-ID
+            // store so services/queue/Sentry can read it via getCorrelationId().
+            customLogLevel: undefined,
             redact: {
               paths: REDACTED_PATHS,
               censor: '[REDACTED]',
