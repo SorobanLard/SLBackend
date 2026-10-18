@@ -1,6 +1,6 @@
 import {
   Injectable, NotFoundException, ForbiddenException, Logger,
-  BadRequestException,
+  BadRequestException, GoneException,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
@@ -140,26 +140,48 @@ export class CertificatesService {
 
   /**
    * Public verification endpoint — checks both DB and on-chain state.
-   * Returns the certificate details if valid, or an error if revoked/not found.
+   *
+   * Returns a distinct state for each outcome:
+   *  - VALID:       certificate exists, is not revoked/fraud-held, and is valid on-chain
+   *  - REVOKED:     certificate exists but has been revoked (410 Gone)
+   *  - FRAUD_HELD:  certificate exists but is flagged as fraud-held (410 Gone)
+   *  - NOT_FOUND:   certificate does not exist (404)
    */
   async verify(certificateId: string) {
     const cert = await this.findById(certificateId);
 
     if (cert.isRevoked) {
-      return { valid: false, reason: 'Certificate has been revoked', certificate: null };
+      throw new GoneException({
+        status: 'REVOKED',
+        valid: false,
+        reason: 'Certificate has been revoked',
+        revokedAt: cert.revokedAt ?? null,
+        revokeReason: cert.revokeReason ?? null,
+        certificate: null,
+      });
+    }
+
+    if (cert.isFraudHeld) {
+      throw new GoneException({
+        status: 'FRAUD_HELD',
+        valid: false,
+        reason: 'Certificate is held pending fraud investigation',
+        certificate: null,
+      });
     }
 
     // Cross-check with on-chain state
     const onChainValid = await this.stellar.verifyCertificateOnChain(certificateId);
     if (!onChainValid) {
-      return {
+      throw new GoneException({
+        status: 'REVOKED',
         valid: false,
         reason: 'Certificate not found or revoked on-chain',
         certificate: null,
-      };
+      });
     }
 
-    return { valid: true, certificate: cert };
+    return { status: 'VALID', valid: true, certificate: cert };
   }
 
   async revoke(certificateId: string, adminId: string, reason?: string) {

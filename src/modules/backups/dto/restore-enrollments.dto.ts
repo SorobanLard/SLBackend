@@ -116,3 +116,47 @@ export class RestoreEnrollmentsDto {
   @IsEnum(EnrollmentConflictStrategy)
   conflictStrategy?: EnrollmentConflictStrategy;
 }
+
+/**
+ * A single enrollment record that could not be restored.
+ * `recordId` is the original backup id when present, otherwise the index of
+ * the record within the submitted `enrollments` array so the admin UI can
+ * retry just the failures.
+ */
+export class RestoreEnrollmentFailureDto {
+  @ApiPropertyOptional({ description: 'Original enrollment id from backup, if provided' })
+  @IsOptional()
+  @IsString()
+  recordId?: string;
+
+  @ApiProperty({ description: 'Zero-based index of the record in the submitted batch' })
+  @IsNumber()
+  index: number;
+
+  @ApiProperty({ description: 'Human-readable reason the record failed' })
+  @IsString()
+  reason: string;
+}
+
+/**
+ * Structured result of a best-effort bulk enrollment restore.
+ * The restore job is best-effort: each record is processed independently so a
+ * single failure (e.g. FK violation on a deleted course) does not roll back the
+ * records that succeeded. Callers can retry only the entries in `failed`.
+ */
+export class RestoreEnrollmentsResultDto {
+  @ApiProperty({ description: 'Total number of records submitted' })
+  @IsNumber()
+  total: number;
+
+  @ApiProperty({ description: 'IDs of records restored successfully', type: [String] })
+  @IsArray()
+  @IsString({ each: true })
+  succeeded: string[];
+
+  @ApiProperty({ type: [RestoreEnrollmentFailureDto] })
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => RestoreEnrollmentFailureDto)
+  failed: RestoreEnrollmentFailureDto[];
+}
