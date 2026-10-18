@@ -10,6 +10,7 @@ import { UpdateReportStatusDto } from './dto/update-report-status.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { resolvePagination } from './reports.common';
 import { ReportTargetType, ReportStatus, UserRole } from '@prisma/client';
 
 @ApiTags('reports (reporter-facing)')
@@ -41,7 +42,8 @@ export class ReportsController {
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
-    return this.reportsService.findMine(reporterId, status, page, limit);
+    const { page: resolvedPage, limit: resolvedLimit } = resolvePagination(page, limit);
+    return this.reportsService.findMine(reporterId, status, resolvedPage, resolvedLimit);
   }
 
   @Get('mine/:id')
@@ -72,10 +74,11 @@ export class ReportsController {
     @Query('page') page?: number,
     @Query('limit') limit?: number,
   ) {
+    const { page: resolvedPage, limit: resolvedLimit } = resolvePagination(page, limit);
     return this.reportsService.adminFindAll(
       { status, targetType, category, severity },
-      page,
-      limit,
+      resolvedPage,
+      resolvedLimit,
     );
   }
 
