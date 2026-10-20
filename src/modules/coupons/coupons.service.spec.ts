@@ -127,6 +127,19 @@ describe('CouponsService (Issue #145) — Validation of expiresAt and discount b
       );
     });
 
+    it('should reject a fixed discount with more than 7 decimal places', async () => {
+      const dto: CreateCouponDto = {
+        code: 'PRECISE',
+        discountType: DiscountType.FIXED,
+        discountValue: 1.00000001,
+      };
+
+      await expect(service.create('user-1', dto)).rejects.toThrow(BadRequestException);
+      await expect(service.create('user-1', dto)).rejects.toThrow(
+        'Fixed discount must be a valid USDC amount',
+      );
+    });
+
     it('should reject negative minOrderAmount with BadRequestException (400)', async () => {
       const dto: CreateCouponDto = {
         code: 'NEGMINORDER',
@@ -269,6 +282,31 @@ describe('CouponsService (Issue #145) — Validation of expiresAt and discount b
       const errors = await validate(dto);
       expect(errors.length).toBeGreaterThan(0);
       expect(errors.some((e) => e.property === 'maxRedemptions')).toBe(true);
+    });
+
+    it('CreateCouponDto fails validation for malformed coupon codes and over-limit percentages', async () => {
+      const plain = {
+        code: 'BAD CODE',
+        discountType: DiscountType.PERCENTAGE,
+        discountValue: 101,
+      };
+      const dto = plainToInstance(CreateCouponDto, plain);
+      const errors = await validate(dto);
+
+      expect(errors.some((e) => e.property === 'code')).toBe(true);
+      expect(errors.some((e) => e.property === 'discountValue')).toBe(true);
+    });
+
+    it('CreateCouponDto fails validation if expiresAt is in the past', async () => {
+      const dto = plainToInstance(CreateCouponDto, {
+        code: 'PASTDATE',
+        discountType: DiscountType.PERCENTAGE,
+        discountValue: 20,
+        expiresAt: new Date(Date.now() - 1000),
+      });
+      const errors = await validate(dto);
+
+      expect(errors.some((e) => e.property === 'expiresAt')).toBe(true);
     });
 
     it('UpdateCouponDto fails validation if minOrderAmount or discountValue is negative', async () => {
