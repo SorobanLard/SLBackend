@@ -7,6 +7,7 @@ import { DiscountType } from '@prisma/client';
 import { CreateCouponDto } from './dto/create-coupon.dto';
 import { UpdateCouponDto } from './dto/update-coupon.dto';
 import { ValidateCouponDto } from './dto/validate-coupon.dto';
+import { isValidUsdcAmount } from '../../common/validators/monetary.validator';
 
 @Injectable()
 export class CouponsService {
@@ -21,8 +22,14 @@ export class CouponsService {
   async create(userId: string, dto: CreateCouponDto) {
     const code = dto.code.toUpperCase().trim();
 
+    if (!/^[A-Z0-9_-]{3,50}$/.test(code)) {
+      throw new BadRequestException(
+        'Coupon code must be 3-50 characters containing only letters, numbers, hyphens, or underscores',
+      );
+    }
+
     // Validate discountValue is positive
-    if (dto.discountValue <= 0) {
+    if (!Number.isFinite(dto.discountValue) || dto.discountValue <= 0) {
       throw new BadRequestException('Discount value must be greater than 0');
     }
 
@@ -31,9 +38,25 @@ export class CouponsService {
       throw new BadRequestException('Percentage discount value cannot exceed 100');
     }
 
-    // Validate minOrderAmount is non-negative
-    if (dto.minOrderAmount !== undefined && dto.minOrderAmount !== null && dto.minOrderAmount < 0) {
+    if (dto.discountType === DiscountType.FIXED && !isValidUsdcAmount(dto.discountValue)) {
+      throw new BadRequestException('Fixed discount must be a valid USDC amount');
+    }
+
+    // Validate minOrderAmount is non-negative and matches USDC precision
+    if (
+      dto.minOrderAmount !== undefined
+      && dto.minOrderAmount !== null
+      && dto.minOrderAmount < 0
+    ) {
       throw new BadRequestException('Minimum order amount cannot be negative');
+    }
+
+    if (
+      dto.minOrderAmount !== undefined
+      && dto.minOrderAmount !== null
+      && !isValidUsdcAmount(dto.minOrderAmount, true)
+    ) {
+      throw new BadRequestException('Minimum order amount must be a valid USDC amount');
     }
 
     // Validate maxRedemptions is non-negative
@@ -41,8 +64,9 @@ export class CouponsService {
       throw new BadRequestException('Maximum redemptions cannot be negative');
     }
 
-    // Validate expiresAt is in the future
-    if (dto.expiresAt && new Date(dto.expiresAt).getTime() <= Date.now()) {
+    // Validate expiresAt is a valid date in the future
+    const expiresAt = dto.expiresAt ? new Date(dto.expiresAt).getTime() : undefined;
+    if (expiresAt !== undefined && (!Number.isFinite(expiresAt) || expiresAt <= Date.now())) {
       throw new BadRequestException('Expiration date must be in the future');
     }
 
@@ -136,10 +160,10 @@ export class CouponsService {
     const discountValue = dto.discountValue ?? Number(existing.discountValue);
     const minOrderAmount = dto.minOrderAmount !== undefined
       ? dto.minOrderAmount
-      : (existing.minOrderAmount ? Number(existing.minOrderAmount) : null);
+      : (existing.minOrderAmount !== null ? Number(existing.minOrderAmount) : null);
     const maxRedemptions = dto.maxRedemptions !== undefined ? dto.maxRedemptions : existing.maxRedemptions;
 
-    if (discountValue <= 0) {
+    if (!Number.isFinite(discountValue) || discountValue <= 0) {
       throw new BadRequestException('Discount value must be greater than 0');
     }
 
@@ -147,16 +171,27 @@ export class CouponsService {
       throw new BadRequestException('Percentage discount value cannot exceed 100');
     }
 
+    if (discountType === DiscountType.FIXED && !isValidUsdcAmount(discountValue)) {
+      throw new BadRequestException('Fixed discount must be a valid USDC amount');
+    }
+
     if (minOrderAmount !== null && minOrderAmount < 0) {
       throw new BadRequestException('Minimum order amount cannot be negative');
+    }
+
+    if (minOrderAmount !== null && !isValidUsdcAmount(minOrderAmount, true)) {
+      throw new BadRequestException('Minimum order amount must be a valid USDC amount');
     }
 
     if (maxRedemptions !== null && maxRedemptions < 0) {
       throw new BadRequestException('Maximum redemptions cannot be negative');
     }
 
-    if (dto.expiresAt !== undefined && dto.expiresAt !== null && new Date(dto.expiresAt).getTime() <= Date.now()) {
-      throw new BadRequestException('Expiration date must be in the future');
+    if (dto.expiresAt !== undefined && dto.expiresAt !== null) {
+      const expiresAt = new Date(dto.expiresAt).getTime();
+      if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
+        throw new BadRequestException('Expiration date must be in the future');
+      }
     }
 
     return this.prisma.coupon.update({
