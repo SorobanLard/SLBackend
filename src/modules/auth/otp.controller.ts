@@ -1,11 +1,13 @@
 import { Controller, Post, Get, Body, UseGuards, HttpCode, HttpStatus } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { OtpService } from './otp.service';
 import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
-@Controller('otp')
+@ApiTags('auth')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 export class OtpController {
   constructor(private readonly otpService: OtpService) {}
@@ -16,6 +18,10 @@ export class OtpController {
    */
   @Post('send')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Send OTP to the user phone number',
+    description: 'Generates and sends a one-time passcode to the user\'s phone number.',
+  })
   async sendOtp(
     @CurrentUser('sub') userId: string,
     @Body() dto: SendOtpDto,
@@ -32,6 +38,10 @@ export class OtpController {
    */
   @Post('verify')
   @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Verify the OTP submitted for the user phone number',
+    description: 'Verifies the one-time passcode submitted by the user.',
+  })
   async verifyOtp(
     @CurrentUser('sub') userId: string,
     @Body() dto: VerifyOtpDto,
@@ -48,6 +58,10 @@ export class OtpController {
    * Get phone verification status for current user
    */
   @Get('status')
+  @ApiOperation({
+    summary: 'Get phone verification status for the current user',
+    description: 'Returns whether the current user\'s phone number is verified.',
+  })
   async getStatus(@CurrentUser('sub') userId: string) {
     return this.otpService.getVerificationStatus(userId);
   }

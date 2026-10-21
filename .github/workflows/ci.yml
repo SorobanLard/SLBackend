@@ -50,6 +50,15 @@ jobs:
       - name: Run linter
         run: npm run lint
 
+      - name: Check OpenAPI/Swagger controller coverage
+        run: |
+          MISSING_CONTROLLERS=$(grep -rL "ApiTags" src/modules --include="*.controller.ts" || true)
+          if [ -n "$MISSING_CONTROLLERS" ]; then
+            echo "Error: Controllers missing the @ApiTags decorator:"
+            echo "$MISSING_CONTROLLERS"
+            exit 1
+          fi
+
       - name: Run Prisma migration
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/slbackend_test
