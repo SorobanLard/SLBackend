@@ -1,0 +1,47 @@
+name: Post-deploy smoke test
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_url:
+        description: 'Base URL of the deployed environment (e.g. https://api.sorobanlard.com)'
+        required: true
+  schedule:
+    - cron: '0 */6 * * *'
+
+jobs:
+  smoke-test:
+    name: Smoke-test deployed endpoints
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Resolve base URL
+        id: vars
+        run: |
+          BASE_URL="${{ inputs.base_url }}"
+          if [ -z "$BASE_URL" ]; then
+            BASE_URL="${{ vars.SMOKE_TEST_BASE_URL }}"
+          fi
+          if [ -z "$BASE_URL" ]; then
+            echo "::error::No base URL provided. Set inputs.base_url or vars.SMOKE_TEST_BASE_URL."
+            exit 1
+          fi
+          echo "base_url=$BASE_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Hit /health endpoint
+        run: |
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "${{ steps.vars.outputs.base_url }}/health")
+          echo "GET /health -> $CODE"
+          case "$CODE" in
+            2*) echo "::notice::/health returned $CODE (2xx)" ;;
+            *)  echo "::error::/health returned $CODE (expected 2xx)"; exit 1 ;;
+          esac
+
+      - name: Hit /api/v1/courses endpoint
+        run: |
+          CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 "${{ steps.vars.outputs.base_url }}/api/v1/courses")
+          echo "GET /api/v1/courses -> $CODE"
+          case "$CODE" in
+            2*) echo "::notice::/api/v1/courses returned $CODE (2xx)" ;;
+            *)  echo "::error::/api/v1/courses returned $CODE (expected 2xx)"; exit 1 ;;
+          esac

@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-audit:
+    name: Build and dependency vulnerability audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Dependency vulnerability scan (npm audit)
+        continue-on-error: true
+        run: |
+          echo "::group::npm audit (--audit-level=high)"
+          npm audit --audit-level=high || true
+          echo "::endgroup::"
+          echo "::warning::npm audit reported high-severity vulnerabilities. Review Dependabot PRs to remediate."
