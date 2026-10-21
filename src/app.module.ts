@@ -12,6 +12,7 @@ import { QueueModule }   from './common/queue/queue.module';
 import { RateLimitMiddleware } from './common/middleware/rate-limit.middleware';
 import { WebhookSignatureMiddleware } from './common/middleware/webhook-signature.middleware';
 import { RoleThrottlerGuard } from './common/guards/role-throttler.guard';
+import { validateEnv }   from './config/env.validation';
 
 import { AuthModule }         from './modules/auth/auth.module';
 import { UsersModule }        from './modules/users/users.module';
@@ -48,7 +49,7 @@ import { QuestionsModule } from './modules/lessons/questions.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env', validate: validateEnv }),
 
     ThrottlerModule.forRootAsync({
       imports: [ConfigModule],
