@@ -300,7 +300,10 @@ Student can share /certificates/verify/:id → public verification
 
 ## Setup
 
+Requires **Node.js >= 20** — `package.json` declares `engines.node` and `.nvmrc` pins the major version used for local dev and CI (`nvm use` picks it up; CI's `actions/setup-node` reads it via `node-version-file`).
+
 ```bash
+nvm use
 cp .env.example .env   # fill in your values
 npm install
 npx prisma migrate dev --name init
