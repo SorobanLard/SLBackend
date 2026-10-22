@@ -16,6 +16,7 @@ import {
 import { Transform, Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { VALID_ORIENTATIONS } from '../certificate-template.types';
+import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
 
 const HEX_COLOR = /^#([0-9A-Fa-f]{6})$/;
 
@@ -227,7 +228,7 @@ export class PreviewCertificateTemplateDto {
   certificateId?: string;
 }
 
-export class QueryCertificateTemplatesDto {
+export class QueryCertificateTemplatesDto extends PaginationQueryDto {
   @ApiPropertyOptional({ example: 'Tailoring' })
   @IsOptional()
   @IsString()
@@ -243,19 +244,4 @@ export class QueryCertificateTemplatesDto {
   })
   @IsBoolean()
   isActive?: boolean;
-
-  @ApiPropertyOptional({ default: 1 })
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Type(() => Number)
-  page?: number;
-
-  @ApiPropertyOptional({ default: 20 })
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  @Type(() => Number)
-  limit?: number;
 }

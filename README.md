@@ -89,6 +89,8 @@ The backend is the content and user management layer of SorobanLard. It handles 
 
 All endpoints prefixed with `/api/v1`. Protected routes require `Authorization: Bearer <JWT>`.
 
+See [docs/API_VERSIONING.md](docs/API_VERSIONING.md) for the versioning and deprecation policy, and [docs/WEBHOOKS.md](docs/WEBHOOKS.md) for inbound webhook contracts.
+
 ### Auth
 | Method | Path | Description |
 |--------|------|-------------|

@@ -1,12 +1,13 @@
-import { IsString, IsNotEmpty, IsOptional, IsEnum, IsInt, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsEnum } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
 
 export enum LeaderboardScope {
   GLOBAL = 'global',
   COURSE = 'course',
 }
 
-export class LeaderboardQueryDto {
+export class LeaderboardQueryDto extends PaginationQueryDto {
   @ApiProperty({ enum: LeaderboardScope, description: 'Scope for leaderboard ranking (global or course)' })
   @IsEnum(LeaderboardScope)
   scope: LeaderboardScope;
@@ -15,17 +16,4 @@ export class LeaderboardQueryDto {
   @IsOptional()
   @IsString()
   courseId?: string;
-
-  @ApiPropertyOptional({ description: 'Number of top students to return', default: 10 })
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  limit?: number;
-
-  @ApiPropertyOptional({ description: 'Page number', default: 1 })
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  page?: number;
 }

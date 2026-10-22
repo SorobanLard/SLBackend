@@ -16,6 +16,7 @@ import { Roles, RolesGuard } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RestoreService } from './restore.service';
 import { RestoreCoursesDto } from './dto/restore-course.dto';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 
 @ApiTags('backups')
 @ApiBearerAuth()
@@ -42,13 +43,10 @@ export class RestoreController {
   @ApiOperation({ summary: 'List course restore jobs and their status' })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  listJobs(
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-  ) {
+  listJobs(@Query() query: PaginationQueryDto) {
     return this.restoreService.listJobs(
-      page ? Number(page) : 1,
-      limit ? Number(limit) : 20,
+      query?.page ?? 1,
+      query?.limit ?? 20,
     );
   }
 

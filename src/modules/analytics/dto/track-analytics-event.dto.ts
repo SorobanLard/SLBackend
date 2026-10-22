@@ -13,6 +13,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
 
 /** Allowed high-level analytics event types */
 export const ANALYTICS_EVENT_TYPES = [
@@ -86,7 +87,7 @@ export class BatchTrackAnalyticsEventsDto {
   events: TrackAnalyticsEventDto[];
 }
 
-export class QueryAnalyticsEventsDto {
+export class QueryAnalyticsEventsDto extends PaginationQueryDto {
   @ApiPropertyOptional({ example: 'page_view' })
   @IsOptional()
   @IsString()
@@ -109,14 +110,4 @@ export class QueryAnalyticsEventsDto {
   @ApiPropertyOptional({ description: 'Required ISO end; queries limited to 90 days' })
   @IsDateString()
   to?: string;
-
-  @ApiPropertyOptional({ default: 1 })
-  @IsOptional()
-  @Type(() => Number)
-  page?: number;
-
-  @ApiPropertyOptional({ default: 50 })
-  @IsOptional()
-  @Type(() => Number)
-  limit?: number;
 }

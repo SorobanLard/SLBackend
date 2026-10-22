@@ -1,14 +1,13 @@
-import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
+import { ApiPropertyOptional } from "@nestjs/swagger";
 import { Type } from "class-transformer";
 import {
   IsBoolean,
   IsEnum,
-  IsInt,
   IsOptional,
   IsString,
-  Min,
 } from "class-validator";
 import { CourseBackupStatus } from "@prisma/client";
+import { PaginationQueryDto } from "../../../common/dto/pagination-query.dto";
 import { RestoreCourseBackupDto } from "./restore-course.dto";
 
 export class RequestCourseBackupDto {
@@ -18,21 +17,7 @@ export class RequestCourseBackupDto {
   courseId?: string;
 }
 
-export class QueryCourseBackupsDto {
-  @ApiPropertyOptional({ default: 1 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number = 1;
-
-  @ApiPropertyOptional({ default: 20 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  limit?: number = 20;
-
+export class QueryCourseBackupsDto extends PaginationQueryDto {
   @ApiPropertyOptional({ enum: CourseBackupStatus })
   @IsOptional()
   @IsEnum(CourseBackupStatus)

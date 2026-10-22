@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { KycStatus, UserRole } from '@prisma/client';
+import { QueryKycDto } from './dto/query-kyc.dto';
 
 @ApiTags('kyc')
 @ApiBearerAuth()
@@ -90,12 +91,8 @@ export class KycController {
   @ApiQuery({ name: 'status', required: false, enum: KycStatus })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  findAll(
-    @Query('status') status?: KycStatus,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-  ) {
-    return this.kycService.findAll(page, limit, status);
+  findAll(@Query() query: QueryKycDto) {
+    return this.kycService.findAll(query?.page, query?.limit, query?.status);
   }
 
   @Get(':id')

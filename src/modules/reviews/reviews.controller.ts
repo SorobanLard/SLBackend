@@ -8,6 +8,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 
 @ApiTags('reviews')
 @Controller('courses')
@@ -33,10 +34,9 @@ export class ReviewsController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   findForCourse(
     @Param('courseId') courseId: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: PaginationQueryDto,
   ) {
-    return this.reviewsService.findForCourse(courseId, page, limit);
+    return this.reviewsService.findForCourse(courseId, query?.page, query?.limit);
   }
 
   @Patch(':courseId/reviews/me')
