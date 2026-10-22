@@ -17,6 +17,7 @@ import { CreateAnswerDto } from './dto/create-answer.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
 
 @ApiTags('lesson-qa')
 @Controller()
@@ -47,13 +48,12 @@ export class QuestionsController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   async getQuestions(
     @Param('lessonId') lessonId: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: PaginationQueryDto,
   ) {
     return this.questionsService.getQuestionsByLesson(
       lessonId,
-      page ? Number(page) : 1,
-      limit ? Number(limit) : 20,
+      query?.page ?? 1,
+      query?.limit ?? 20,
     );
   }
 

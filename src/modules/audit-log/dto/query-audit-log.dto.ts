@@ -1,8 +1,8 @@
-import { IsEnum, IsOptional, IsString, Min, Max, IsInt, IsDateString } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsEnum, IsOptional, IsString, IsDateString } from 'class-validator';
 import { AuditAction, AuditTargetType } from '@prisma/client';
+import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
 
-export class QueryAuditLogDto {
+export class QueryAuditLogDto extends PaginationQueryDto {
   @IsOptional()
   @IsString()
   actorId?: string;
@@ -26,17 +26,4 @@ export class QueryAuditLogDto {
   @IsOptional()
   @IsDateString()
   to?: string;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(200)
-  limit?: number;
 }

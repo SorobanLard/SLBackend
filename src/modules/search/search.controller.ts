@@ -31,21 +31,14 @@ export class SearchController {
   @ApiQuery({ name: 'language', required: false, description: 'Filter by language' })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  search(
-    @Query('query') query: string,
-    @Query('category') category?: string,
-    @Query('level') level?: string,
-    @Query('language') language?: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-  ) {
+  search(@Query() dto: SearchQueryDto) {
     return this.searchService.search({
-      query,
-      category,
-      level,
-      language,
-      page: page ?? 1,
-      limit: limit ?? 20,
+      query: dto.query,
+      category: dto.category,
+      level: dto.level,
+      language: dto.language,
+      page: dto.page ?? 1,
+      limit: dto.limit ?? 20,
     });
   }
 

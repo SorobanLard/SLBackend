@@ -11,6 +11,8 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ReportTargetType, ReportStatus, UserRole } from '@prisma/client';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { QueryAdminReportsDto, QueryMyReportsDto } from './dto/query-reports.dto';
 
 @ApiTags('reports (reporter-facing)')
 @ApiBearerAuth()
@@ -37,11 +39,14 @@ export class ReportsController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   findMine(
     @CurrentUser('id') reporterId: string,
-    @Query('status') status?: ReportStatus,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: QueryMyReportsDto,
   ) {
-    return this.reportsService.findMine(reporterId, status, page, limit);
+    return this.reportsService.findMine(
+      reporterId,
+      query?.status,
+      query?.page,
+      query?.limit,
+    );
   }
 
   @Get('mine/:id')
@@ -64,18 +69,16 @@ export class ReportsController {
   @ApiQuery({ name: 'severity', required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  adminFindAll(
-    @Query('status') status?: ReportStatus,
-    @Query('targetType') targetType?: ReportTargetType,
-    @Query('category') category?: string,
-    @Query('severity') severity?: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-  ) {
+  adminFindAll(@Query() query: QueryAdminReportsDto) {
     return this.reportsService.adminFindAll(
-      { status, targetType, category, severity },
-      page,
-      limit,
+      {
+        status: query?.status,
+        targetType: query?.targetType,
+        category: query?.category,
+        severity: query?.severity,
+      },
+      query?.page,
+      query?.limit,
     );
   }
 
@@ -84,8 +87,8 @@ export class ReportsController {
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'List the most-reported targets, ranked by report count' })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  adminTopTargets(@Query('limit') limit?: number) {
-    return this.reportsService.adminTopReportedTargets(limit);
+  adminTopTargets(@Query() query: PaginationQueryDto) {
+    return this.reportsService.adminTopReportedTargets(query?.limit);
   }
 
   @Get('admin/target/:targetType/:targetId/count')

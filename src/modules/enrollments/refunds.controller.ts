@@ -11,6 +11,8 @@ import { ProcessRefundDto } from './dto/process-refund.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { RefundQueryDto } from './dto/refund-query.dto';
 import { RefundStatus, UserRole } from '@prisma/client';
 
 @ApiTags('refunds')
@@ -35,10 +37,9 @@ export class RefundsController {
   @ApiOperation({ summary: 'Get the authenticated student\'s refund requests' })
   findMy(
     @CurrentUser('id') studentId: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: PaginationQueryDto,
   ) {
-    return this.refundsService.findByStudent(studentId, page, limit);
+    return this.refundsService.findByStudent(studentId, query?.page, query?.limit);
   }
 
   @Get(':id')
@@ -62,12 +63,12 @@ export class RefundsController {
   @ApiQuery({ name: 'status', required: false, enum: RefundStatus })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  findAll(
-    @Query('status') status?: RefundStatus,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-  ) {
-    return this.refundsService.findAll({ status, page, limit });
+  findAll(@Query() query: RefundQueryDto) {
+    return this.refundsService.findAll({
+      status: query?.status,
+      page: query?.page,
+      limit: query?.limit,
+    });
   }
 
   @Post(':id/approve')
