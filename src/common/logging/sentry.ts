@@ -1,8 +1,39 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import * as Sentry from '@sentry/node';
 
 const SENSITIVE_FIELD = /authorization|cookie|password|secret|token|api[-_]?key|otp|email|phone/i;
 
-export const CORRELATION_ID_TAG = 'correlation_id';
+/**
+ * Issue #167 — resolve SENTRY_RELEASE at build/run time.
+ *
+ * Resolution order:
+ *   1. process.env.SENTRY_RELEASE (set by CI/deployment)
+ *   2. dist/sentry-release.env (written by the `postbuild` script from package.json version)
+ *   3. npm_package_version (set by npm while running npm scripts)
+ *   4. hardcoded "0.1.0" fallback
+ */
+function resolveSentryRelease(): string {
+  if (process.env.SENTRY_RELEASE) {
+    return process.env.SENTRY_RELEASE;
+  }
+
+  const envFile = path.resolve(process.cwd(), 'dist', 'sentry-release.env');
+  try {
+    if (fs.existsSync(envFile)) {
+      const match = fs
+        .readFileSync(envFile, 'utf8')
+        .match(/^SENTRY_RELEASE=(.+)$/m);
+      if (match?.[1]) {
+        return match[1].trim();
+      }
+    }
+  } catch {
+    // Ignore unreadable env file; fall through to npm_package_version.
+  }
+
+  return `sorobanlard-backend@${process.env.npm_package_version || '0.1.0'}`;
+}
 
 export function scrubSentryEvent<T>(event: T): T {
   return scrubValue(event) as T;
@@ -37,33 +68,6 @@ function scrubValue(value: unknown, key?: string): unknown {
   return value;
 }
 
-/**
- * Attach the request/job correlation ID to the active Sentry scope so it is
- * included as a tag on every event (sync request errors and async job failures).
- */
-export function setSentryCorrelationId(correlationId?: string | null): void {
-  if (!correlationId) {
-    return;
-  }
-
-  Sentry.getCurrentScope().setTag(CORRELATION_ID_TAG, correlationId);
-}
-
-/**
- * Run `fn` with the correlation ID tagged on an isolated Sentry scope, so
- * concurrent requests/jobs do not leak tags into each other's events.
- */
-export function withSentryCorrelationId<T>(correlationId: string | null | undefined, fn: () => T): T {
-  if (!correlationId) {
-    return fn();
-  }
-
-  return Sentry.withScope((scope) => {
-    scope.setTag(CORRELATION_ID_TAG, correlationId);
-    return fn();
-  });
-}
-
 export function initializeSentry(): void {
   const dsn = process.env.SENTRY_DSN;
   if (!dsn) {
@@ -73,7 +77,7 @@ export function initializeSentry(): void {
   Sentry.init({
     dsn,
     environment: process.env.SENTRY_ENVIRONMENT || process.env.NODE_ENV || 'development',
-    release: process.env.SENTRY_RELEASE || `sorobanlard-backend@${process.env.npm_package_version || '0.1.0'}`,
+    release: resolveSentryRelease(),
     beforeSend: (event) => scrubSentryEvent(event),
   });
 }
