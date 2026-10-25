@@ -2,12 +2,15 @@ import { Controller, Get } from '@nestjs/common';
 import {
   HealthCheck,
   HealthCheckService,
+  HealthCheckError,
   HealthIndicatorResult,
   PrismaHealthIndicator,
 } from '@nestjs/terminus';
 import { ApiTags, ApiOperation } from '@nestjs/swagger';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { EventsService } from '../events/events.service';
+import { CacheService } from '../../common/cache/cache.service';
+import { SearchService } from '../search/search.service';
 
 @ApiTags('health')
 @Controller('health')
@@ -17,14 +20,21 @@ export class HealthController {
     private readonly prismaHealth: PrismaHealthIndicator,
     private readonly prisma: PrismaService,
     private readonly events: EventsService,
+    private readonly cache: CacheService,
+    private readonly search: SearchService,
   ) {}
 
   @Get()
   @HealthCheck()
-  @ApiOperation({ summary: 'Check API and database health' })
+  @ApiOperation({
+    summary:
+      'Readiness probe: checks Postgres (Prisma), Redis, Meilisearch and the event-poller checkpoint',
+  })
   check() {
     return this.health.check([
       () => this.prismaHealth.pingCheck('database', this.prisma),
+      () => this.redisPingIndicator(),
+      () => this.meilisearchPingIndicator(),
       () => this.eventPollerCheckpointIndicator(),
     ]);
   }
@@ -35,6 +45,28 @@ export class HealthController {
   })
   checkpoint() {
     return this.events.getCheckpointStatus();
+  }
+
+  private async redisPingIndicator(): Promise<HealthIndicatorResult> {
+    try {
+      const roundTripMs = await this.cache.ping();
+      return { redis: { status: 'up', roundTripMs } };
+    } catch (err) {
+      throw new HealthCheckError('Redis ping failed', {
+        redis: { status: 'down', message: (err as Error).message },
+      });
+    }
+  }
+
+  private async meilisearchPingIndicator(): Promise<HealthIndicatorResult> {
+    try {
+      const roundTripMs = await this.search.ping();
+      return { meilisearch: { status: 'up', roundTripMs } };
+    } catch (err) {
+      throw new HealthCheckError('Meilisearch ping failed', {
+        meilisearch: { status: 'down', message: (err as Error).message },
+      });
+    }
   }
 
   /**

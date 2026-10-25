@@ -161,7 +161,49 @@ All endpoints prefixed with `/api/v1`. Protected routes require `Authorization: 
 | `POST` | `/uploads/resource` | ✓ | Upload downloadable resource (max 50MB) |
 | `POST` | `/uploads/assignment` | ✓ | Upload assignment submission (max 100MB) |
 
-### Events, Notifications, Health — standard across all SorobanLard repos
+### Events, Notifications — standard across all SorobanLard repos
+
+### Health
+Readiness probe for container orchestrators (no auth; exempt from IP rate limiting via `rate-limit.middleware.ts`).
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/health` | Aggregate readiness check: **Postgres** (Prisma ping), **Redis** (ping), **Meilisearch** (health) + informational event-poller checkpoint |
+| `GET` | `/health/checkpoint` | Authoritative Stellar event-poller ledger checkpoint status (crash recovery) |
+
+Response shape for `GET /health` — `200` when every critical dependency is up, `503` (via `ServiceUnavailableException`) as soon as one is down, so orchestrators stop routing traffic to the unhealthy instance:
+
+```json
+{
+  "status": "ok",
+  "info": {
+    "database":   { "status": "up" },
+    "redis":      { "status": "up", "roundTripMs": 3 },
+    "meilisearch":{ "status": "up", "roundTripMs": 7 },
+    "event_poller_checkpoint": {
+      "status": "up",
+      "checkpointHealthy": true,
+      "lastProcessedLedger": 5123,
+      "persistedLedger": 5123,
+      "lastPolledAt": "2026-08-27T12:00:00.000Z",
+      "resumedFromCheckpoint": true,
+      "consecutiveWriteFailures": 0,
+      "lastWriteError": null
+    }
+  },
+  "error": {},
+  "details": {
+    "database":   { "status": "up" },
+    "redis":      { "status": "up", "roundTripMs": 3 },
+    "meilisearch":{ "status": "up", "roundTripMs": 7 },
+    "event_poller_checkpoint": { "status": "up", "checkpointHealthy": true }
+  }
+}
+```
+
+- `info` — keys of every indicator that reported `up` (with per-indicator metadata, e.g. Redis/Meilisearch round-trip latency in `roundTripMs`).
+- `error` / `details` — on failure contain the failed indicator payload (e.g. `redis: { "status": "down", "message": "ECONNREFUSED ..." }`); `details` always includes every indicator. `status` becomes `"error"` and the endpoint returns `503`.
+- `event_poller_checkpoint` is informational only: a degraded checkpoint (write failures) still reports `200` so the poller never pulls the whole service out of rotation; consult `/health/checkpoint` for the authoritative state.
 
 ---
 
@@ -258,7 +300,10 @@ Student can share /certificates/verify/:id → public verification
 
 ## Setup
 
+Requires **Node.js >= 20** — `package.json` declares `engines.node` and `.nvmrc` pins the major version used for local dev and CI (`nvm use` picks it up; CI's `actions/setup-node` reads it via `node-version-file`).
+
 ```bash
+nvm use
 cp .env.example .env   # fill in your values
 npm install
 npx prisma migrate dev --name init

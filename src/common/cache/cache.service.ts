@@ -48,6 +48,17 @@ export class CacheService implements OnModuleDestroy {
     return `cache:${namespace}${sortedEntries.length ? ':' + sortedEntries.join('&') : ''}`;
   }
 
+  /**
+   * Round-trip Redis PING used by the aggregate /health check (issue #170).
+   * Rejects when the connection is down so the health aggregation fails the
+   * readiness probe. Returns the round-trip time in milliseconds.
+   */
+  async ping(): Promise<number> {
+    const startedAt = Date.now();
+    await this.redis.ping();
+    return Date.now() - startedAt;
+  }
+
   async get<T = unknown>(key: string): Promise<T | null> {
     try {
       const raw = await this.redis.get(key);

@@ -5,6 +5,9 @@
   "author": "SorobanLard Team",
   "private": true,
   "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "build": "nest build",
     "postbuild": "node scripts/write-sentry-release.js",

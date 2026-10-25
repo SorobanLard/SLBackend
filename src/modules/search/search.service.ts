@@ -140,6 +140,25 @@ export class SearchService implements OnModuleInit, OnModuleDestroy {
   }
 
   // ---------------------------------------------------------------
+  // HEALTH
+  // ---------------------------------------------------------------
+
+  /**
+   * Round-trip Meilisearch availability ping used by the aggregate /health
+   * check (issue #170). Rejects on a reachable-but-unhealthy or unreachable
+   * engine so the health aggregation fails the readiness probe.
+   * Returns the round-trip time in milliseconds.
+   */
+  async ping(): Promise<number> {
+    const startedAt = Date.now();
+    const health = await this.client.health();
+    if (health.status !== 'available') {
+      throw new Error(`Meilisearch not available (reported status: ${health.status})`);
+    }
+    return Date.now() - startedAt;
+  }
+
+  // ---------------------------------------------------------------
   // INDEX MANAGEMENT
   // ---------------------------------------------------------------
 
