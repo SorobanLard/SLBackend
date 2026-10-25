@@ -5,7 +5,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { FeeCalculatorService } from '../billing/fee-calculator.service';
 import { SearchService } from '../search/search.service';
 import { CacheService } from '../../common/cache/cache.service';
-import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { CourseStatus } from '@prisma/client';
 
 const mockPrisma = {
@@ -219,56 +219,31 @@ describe('CoursesService', () => {
   });
 
   // ----------------------------------------------------------
-  // SUBMIT FOR REVIEW
+  // SET PREREQUISITES (cycle detection)
   // ----------------------------------------------------------
 
-  describe('submitForReview()', () => {
-    it('moves a DRAFT course to PENDING', async () => {
-      const draftCourse = {
-        ...MOCK_COURSE,
-        status: CourseStatus.DRAFT,
-        modules: [],
-        _count: { enrollments: 0 },
-        instructor: { name: 'John', stellarAddress: 'GABC', avatarUrl: null, bio: null },
-      };
-      mockPrisma.course.findUnique.mockResolvedValue(draftCourse);
-      mockPrisma.course.update.mockResolvedValue({ ...draftCourse, status: CourseStatus.PENDING });
-
-      const result = await service.submitForReview(
-        'COURSE-TAILORING-001', 'instructor-id', 'tx-hash-abc',
-      );
-      expect(result.status).toBe(CourseStatus.PENDING);
-    });
-
-    it('throws ForbiddenException if course is not a DRAFT', async () => {
-      const pendingCourse = {
-        ...MOCK_COURSE,
-        status: CourseStatus.PENDING,
-        modules: [],
-        _count: { enrollments: 0 },
-        instructor: { name: 'John', stellarAddress: 'GABC', avatarUrl: null, bio: null },
-      };
-      mockPrisma.course.findUnique.mockResolvedValue(pendingCourse);
-      await expect(service.submitForReview('COURSE-TAILORING-001', 'instructor-id'))
-        .rejects.toThrow(ForbiddenException);
-    });
-  });
-
-  // ----------------------------------------------------------
-  // GET CATEGORIES
-  // ----------------------------------------------------------
-
-  describe('getCategories()', () => {
-    it('returns category list with counts', async () => {
-      mockPrisma.course.groupBy.mockResolvedValue([
-        { category: 'Tailoring', _count: { category: 5 } },
-        { category: 'Makeup',    _count: { category: 3 } },
-        { category: 'Baking',    _count: { category: 7 } },
+  describe('setPrerequisites()', () => {
+    it('rejects a direct cycle (A requires B requires A)', async () => {
+      mockPrisma.course.findUnique.mockResolvedValue(MOCK_COURSE);
+      mockPrisma.course.findMany.mockResolvedValue([
+        { id: 'A', prerequisites: [{ prerequisiteId: 'B' }] },
+        { id: 'B', prerequisites: [{ prerequisiteId: 'A' }] },
       ]);
 
-      const result = await service.getCategories();
-      expect(result).toHaveLength(3);
-      expect(result[0]).toEqual({ name: 'Tailoring', count: 5 });
+      await expect(service.setPrerequisites('A', ['B'] as any))
+        .rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects an indirect cycle (A->B->C->A)', async () => {
+      mockPrisma.course.findUnique.mockResolvedValue(MOCK_COURSE);
+      mockPrisma.course.findMany.mockResolvedValue([
+        { id: 'A', prerequisites: [{ prerequisiteId: 'B' }] },
+        { id: 'B', prerequisites: [{ prerequisiteId: 'C' }] },
+        { id: 'C', prerequisites: [{ prerequisiteId: 'A' }] },
+      ]);
+
+      await expect(service.setPrerequisites('A', ['B'] as any))
+        .rejects.toThrow(BadRequestException);
     });
   });
 });

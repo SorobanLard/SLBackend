@@ -1,51 +1,83 @@
-// http-exception.filter.ts
 import {
-  ExceptionFilter, Catch, ArgumentsHost,
-  HttpException, HttpStatus, Logger,
+  ArgumentsHost,
+  Catch,
+  ExceptionFilter,
+  HttpException,
+  HttpStatus,
+  Logger,
 } from '@nestjs/common';
-import { Request, Response } from 'express';
+import { Prisma } from '@prisma/client';
 import * as Sentry from '@sentry/node';
+import { Request, Response } from 'express';
+
+const PRISMA_ERROR_STATUS: Record<string, HttpStatus> = {
+  P2002: HttpStatus.CONFLICT,
+  P2025: HttpStatus.NOT_FOUND,
+  P2003: HttpStatus.BAD_REQUEST,
+};
+
+const PRISMA_ERROR_MESSAGE: Record<string, string> = {
+  P2002: 'A record with this value already exists',
+  P2025: 'The requested record was not found',
+  P2003: 'The request references a related record that does not exist',
+};
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(HttpExceptionFilter.name);
 
-  catch(exception: unknown, host: ArgumentsHost) {
-    const ctx      = host.switchToHttp();
+  catch(exception: unknown, host: ArgumentsHost): void {
+    const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
-    const request  = ctx.getRequest<Request>();
+    const request = ctx.getRequest<Request>();
 
-    const status = exception instanceof HttpException
-      ? exception.getStatus()
-      : HttpStatus.INTERNAL_SERVER_ERROR;
+    const { status, message } = this.resolve(exception);
 
-    const message = exception instanceof HttpException
-      ? exception.getResponse()
-      : 'Internal server error';
-
-    if (status === HttpStatus.INTERNAL_SERVER_ERROR) {
-      const endpoint = request.route?.path
-        ? `${request.baseUrl}${request.route.path}`
-        : request.path;
-
-      this.logger.error(
-        `${request.method} ${request.path}`,
-        exception instanceof Error ? exception.stack : String(exception),
-      );
+    if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
       Sentry.captureException(exception, {
         tags: {
-          endpoint: endpoint || 'unknown',
+          endpoint: `${request.baseUrl ?? ''}${request.route?.path ?? request.path ?? request.url}`,
           method: request.method,
         },
       });
     }
 
     response.status(status).json({
-      success:    false,
       statusCode: status,
-      timestamp:  new Date().toISOString(),
-      path:       request.path,
-      message:    typeof message === 'string' ? message : (message as any).message || message,
+      message,
+      path: request.path ?? request.url,
+      timestamp: new Date().toISOString(),
     });
+  }
+
+  private resolve(exception: unknown): { status: number; message: string } {
+    if (exception instanceof Prisma.PrismaClientKnownRequestError) {
+      const status = PRISMA_ERROR_STATUS[exception.code];
+      if (status) {
+        return {
+          status,
+          message: PRISMA_ERROR_MESSAGE[exception.code],
+        };
+      }
+    }
+
+    if (exception instanceof HttpException) {
+      const status = exception.getStatus();
+      const body = exception.getResponse();
+      const message =
+        typeof body === 'string'
+          ? body
+          : (body as { message?: string | string[] }).message ?? exception.message;
+      return { status, message: Array.isArray(message) ? message.join(', ') : message };
+    }
+
+    this.logger.error(
+      exception instanceof Error ? exception.stack : String(exception),
+    );
+
+    return {
+      status: HttpStatus.INTERNAL_SERVER_ERROR,
+      message: 'Internal server error',
+    };
   }
 }
