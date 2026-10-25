@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsEnum,
   IsDateString,
+  MaxLength,
 } from 'class-validator';
 import { PayoutStatus } from '@prisma/client';
 
@@ -27,6 +28,11 @@ export class CreatePayoutDto {
   @IsOptional()
   @IsDateString()
   periodEnd?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  idempotencyKey?: string;
 }
 
 export class UpdatePayoutStatusDto {

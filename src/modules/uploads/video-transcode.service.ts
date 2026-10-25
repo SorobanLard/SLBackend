@@ -9,11 +9,22 @@ import { CdnService, MediaDeliveryUrls } from './cdn.service';
 
 type TranscodedUploadResult = MediaDeliveryUrls & { url: string };
 
+export enum VideoStatus {
+  PROCESSING = 'PROCESSING',
+  READY = 'READY',
+  FAILED = 'FAILED',
+}
+
 export interface TranscodeJobData {
   videoId: string;
   sourcePath: string;
   filename: string;
   subfolder: string;
+}
+
+export interface TranscodeFailure {
+  status: VideoStatus.FAILED;
+  reason: string;
 }
 
 export const TRANSCODE_QUEUE = 'video-transcode';
@@ -51,10 +62,12 @@ export class VideoTranscodeService {
     if (!job) {
       return null;
     }
+    const state = await job.getState();
+    const failed = state === 'failed';
     return {
       id: job.id,
       progress: job.progress,
-      status: await job.getState(),
+      status: failed ? VideoStatus.FAILED : state,
       result: job.returnvalue,
       failedReason: job.failedReason,
     };
@@ -123,5 +136,17 @@ export class VideoTranscodeProcessor extends WorkerHost {
     this.logger.log(`Completed transcode job ${job.id}`);
     
     return outputUrls;
+  }
+
+  async onFailed(job: Job<TranscodeJobData, any, string>, error: Error): Promise<void> {
+    const reason = error?.message || 'Video transcoding failed';
+    this.logger.error(
+      `Transcode job ${job.id} for video ${job.data.videoId} failed: ${reason}`,
+    );
+    await job.updateData({
+      ...job.data,
+      status: VideoStatus.FAILED,
+      failureReason: reason,
+    } as TranscodeJobData);
   }
 }

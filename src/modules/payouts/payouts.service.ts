@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ForbiddenException,
+  ConflictException,
   Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
@@ -9,6 +10,12 @@ import { KycService } from '../kyc/kyc.service';
 import { PayoutQueryDto } from './dto/payout-query.dto';
 import { CreatePayoutDto, UpdatePayoutStatusDto } from './dto/create-payout.dto';
 import { PayoutStatus, UserRole } from '@prisma/client';
+
+/**
+ * Time window (ms) within which a duplicate idempotency key is treated as a
+ * retry of the same payout request rather than a new payout.
+ */
+const IDEMPOTENCY_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class PayoutsService {
@@ -121,9 +128,44 @@ export class PayoutsService {
   }
 
   /**
+   * Derive a deterministic idempotency key from the payout schedule and period
+   * when the client does not supply one explicitly.
+   */
+  private deriveIdempotencyKey(dto: CreatePayoutDto): string {
+    if (dto.idempotencyKey) {
+      return dto.idempotencyKey;
+    }
+
+    const periodStart = dto.periodStart ?? '';
+    const periodEnd = dto.periodEnd ?? '';
+    return `payout:${dto.instructorId}:${periodStart}:${periodEnd}`;
+  }
+
+  /**
    * Create a new payout record (Admin or automated platform payout).
+   *
+   * Idempotent: a duplicate request carrying the same idempotency key within
+   * the idempotency window returns the existing payout instead of creating a
+   * second one, preventing double-payout on client retries.
    */
   async createPayout(dto: CreatePayoutDto) {
+    const idempotencyKey = this.deriveIdempotencyKey(dto);
+
+    const existing = await this.prisma.payout.findFirst({
+      where: {
+        idempotencyKey,
+        createdAt: { gte: new Date(Date.now() - IDEMPOTENCY_WINDOW_MS) },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (existing) {
+      this.logger.log(
+        `Duplicate payout request detected for idempotency key ${idempotencyKey}; returning existing payout ${existing.id}`,
+      );
+      return existing;
+    }
+
     const instructor = await this.prisma.user.findUnique({
       where: { id: dto.instructorId },
     });
@@ -140,19 +182,42 @@ export class PayoutsService {
       );
     }
 
-    const payout = await this.prisma.payout.create({
-      data: {
-        instructorId: dto.instructorId,
-        amount: dto.amount,
-        currency: dto.currency ?? 'USDC',
-        status: PayoutStatus.PENDING,
-        periodStart: dto.periodStart ? new Date(dto.periodStart) : null,
-        periodEnd: dto.periodEnd ? new Date(dto.periodEnd) : null,
-      },
-    });
+    try {
+      const payout = await this.prisma.payout.create({
+        data: {
+          instructorId: dto.instructorId,
+          amount: dto.amount,
+          currency: dto.currency ?? 'USDC',
+          status: PayoutStatus.PENDING,
+          periodStart: dto.periodStart ? new Date(dto.periodStart) : null,
+          periodEnd: dto.periodEnd ? new Date(dto.periodEnd) : null,
+          idempotencyKey,
+        },
+      });
 
-    this.logger.log(`Payout record created: ${payout.id} for instructor ${dto.instructorId}`);
-    return payout;
+      this.logger.log(
+        `Payout record created: ${payout.id} for instructor ${dto.instructorId} (idempotency key ${idempotencyKey})`,
+      );
+      return payout;
+    } catch (error) {
+      // Handle a concurrent request that won the race on the unique key.
+      if ((error as any)?.code === 'P2002') {
+        const raced = await this.prisma.payout.findFirst({
+          where: { idempotencyKey },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (raced) {
+          this.logger.log(
+            `Concurrent duplicate payout request for idempotency key ${idempotencyKey}; returning existing payout ${raced.id}`,
+          );
+          return raced;
+        }
+        throw new ConflictException(
+          'A payout with this idempotency key already exists',
+        );
+      }
+      throw error;
+    }
   }
 
   /**
