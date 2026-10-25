@@ -1,20 +1,18 @@
 import {
   IsString,
-  IsNumber,
-  Min,
   IsOptional,
   IsEnum,
   IsDateString,
   MaxLength,
 } from 'class-validator';
 import { PayoutStatus } from '@prisma/client';
+import { IsUsdcAmount } from '../../../common/validators/monetary.validator';
 
 export class CreatePayoutDto {
   @IsString()
   instructorId: string;
 
-  @IsNumber()
-  @Min(0.01)
+  @IsUsdcAmount()
   amount: number;
 
   @IsOptional()
