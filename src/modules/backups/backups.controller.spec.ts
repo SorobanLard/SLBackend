@@ -69,8 +69,7 @@ describe("BackupsController", () => {
       const res = await controller.getCourseBackupVersions(
         "course-1",
         mockUser,
-        1,
-        10,
+        { page: 1, limit: 10 },
       );
 
       expect(mockBackupsService.getCourseBackupVersions).toHaveBeenCalledWith(

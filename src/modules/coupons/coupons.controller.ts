@@ -11,6 +11,8 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UserRole } from '@prisma/client';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { QueryCouponsDto } from './dto/query-coupons.dto';
 
 @ApiTags('coupons')
 @ApiBearerAuth()
@@ -42,12 +44,12 @@ export class CouponsController {
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiQuery({ name: 'isActive', required: false, type: Boolean })
-  findAll(
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('isActive') isActive?: boolean,
-  ) {
-    return this.couponsService.findAll(page, limit, isActive);
+  findAll(@Query() query: QueryCouponsDto) {
+    return this.couponsService.findAll(
+      query?.page,
+      query?.limit,
+      query?.isActive,
+    );
   }
 
   @Get(':id')
@@ -83,10 +85,9 @@ export class CouponsController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   getRedemptions(
     @Param('id') id: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: PaginationQueryDto,
   ) {
-    return this.couponsService.getRedemptions(id, page, limit);
+    return this.couponsService.getRedemptions(id, query?.page, query?.limit);
   }
 
   // ----------------------------------------------------------

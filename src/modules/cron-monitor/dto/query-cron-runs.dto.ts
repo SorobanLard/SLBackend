@@ -1,9 +1,9 @@
-import { IsEnum, IsInt, IsOptional, IsString, Max, Min, IsDateString } from 'class-validator';
+import { IsEnum, IsOptional, IsString, IsDateString } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
 import { CronJobStatus } from '@prisma/client';
+import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
 
-export class QueryCronRunsDto {
+export class QueryCronRunsDto extends PaginationQueryDto {
   @ApiPropertyOptional({ description: 'Filter by job name' })
   @IsOptional()
   @IsString()
@@ -23,19 +23,4 @@ export class QueryCronRunsDto {
   @IsOptional()
   @IsDateString()
   to?: string;
-
-  @ApiPropertyOptional({ default: 1, minimum: 1 })
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Type(() => Number)
-  page?: number;
-
-  @ApiPropertyOptional({ default: 50, minimum: 1, maximum: 200 })
-  @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(200)
-  @Type(() => Number)
-  limit?: number;
 }

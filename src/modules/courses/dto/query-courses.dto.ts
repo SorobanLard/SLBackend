@@ -1,9 +1,9 @@
-import { IsOptional, IsString, IsInt, Min, Max, IsEnum } from 'class-validator';
-import { Type } from 'class-transformer';
+import { IsOptional, IsString, IsEnum } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { CourseStatus } from '@prisma/client';
+import { PaginationQueryDto } from '../../../common/dto/pagination-query.dto';
 
-export class QueryCoursesDto {
+export class QueryCoursesDto extends PaginationQueryDto {
   @ApiPropertyOptional({ description: 'Filter courses by category' })
   @IsOptional()
   @IsString()
@@ -23,19 +23,4 @@ export class QueryCoursesDto {
   @IsOptional()
   @IsEnum(CourseStatus)
   status?: CourseStatus;
-
-  @ApiPropertyOptional({ description: 'Page number (1-based)', default: 1 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number = 1;
-
-  @ApiPropertyOptional({ description: 'Number of items per page (max 100)', default: 20 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  limit?: number = 20;
 }

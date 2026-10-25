@@ -21,6 +21,7 @@ import { JwtAuthGuard } from "../../common/guards/jwt-auth.guard";
 import { Roles, RolesGuard } from "../../common/guards/roles.guard";
 import { BackupsService, UserContext } from "./backups.service";
 import { QueryCourseBackupsDto } from "./dto/course-backup.dto";
+import { PaginationQueryDto } from "../../common/dto/pagination-query.dto";
 
 @ApiTags("backups")
 @ApiBearerAuth()
@@ -50,14 +51,13 @@ export class BackupsController {
   getCourseBackupVersions(
     @Param("courseId") courseId: string,
     @CurrentUser() user: UserContext,
-    @Query("page") page?: number,
-    @Query("limit") limit?: number,
+    @Query() query: PaginationQueryDto,
   ) {
     return this.backupsService.getCourseBackupVersions(
       courseId,
       user,
-      page ? Number(page) : 1,
-      limit ? Number(limit) : 20,
+      query?.page ?? 1,
+      query?.limit ?? 20,
     );
   }
 

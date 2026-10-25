@@ -25,6 +25,7 @@ import { FraudDetectionService, ReviewFlagDto } from './fraud-detection.service'
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { FraudQueueQueryDto } from './dto/fraud-queue-query.dto';
 import { UserRole, FraudFlagStatus, FraudRiskLevel } from '@prisma/client';
 
 @ApiTags('fraud-review')
@@ -50,13 +51,12 @@ export class FraudController {
   @ApiQuery({ name: 'riskLevel', required: false, enum: FraudRiskLevel })
   @ApiQuery({ name: 'page',      required: false, type: Number })
   @ApiQuery({ name: 'limit',     required: false, type: Number })
-  getQueue(
-    @Query('status')    status?: FraudFlagStatus,
-    @Query('riskLevel') riskLevel?: FraudRiskLevel,
-    @Query('page')      page?: number,
-    @Query('limit')     limit?: number,
-  ) {
-    return this.fraudDetection.getFraudReviewQueue({ status, riskLevel }, page, limit);
+  getQueue(@Query() query: FraudQueueQueryDto) {
+    return this.fraudDetection.getFraudReviewQueue(
+      { status: query?.status, riskLevel: query?.riskLevel },
+      query?.page,
+      query?.limit,
+    );
   }
 
   // -------------------------------------------------------------------------

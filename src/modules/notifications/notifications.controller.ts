@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { NotificationType } from '@prisma/client';
+import { QueryNotificationsDto } from './dto/query-notifications.dto';
 import { NotificationsService } from './notifications.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -16,11 +17,14 @@ export class NotificationsController {
   @ApiOperation({ summary: 'Get notifications for the authenticated user' })
   findAll(
     @CurrentUser('id') userId: string,
-    @Query('unreadOnly') unreadOnly?: boolean,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: QueryNotificationsDto,
   ) {
-    return this.notificationsService.findForUser(userId, unreadOnly, page, limit);
+    return this.notificationsService.findForUser(
+      userId,
+      query?.unreadOnly,
+      query?.page,
+      query?.limit,
+    );
   }
 
   @Get('unread-count')

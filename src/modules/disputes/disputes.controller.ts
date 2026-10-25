@@ -10,6 +10,8 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { DisputeStatus, UserRole } from '@prisma/client';
+import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
+import { DisputeQueryDto } from './dto/dispute-query.dto';
 
 @ApiTags('disputes')
 @ApiBearerAuth()
@@ -38,10 +40,9 @@ export class DisputesController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   findMy(
     @CurrentUser('id') studentId: string,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query() query: PaginationQueryDto,
   ) {
-    return this.disputesService.findMyDisputes(studentId, page, limit);
+    return this.disputesService.findMyDisputes(studentId, query?.page, query?.limit);
   }
 
   @Get('my/:id')
@@ -65,12 +66,12 @@ export class DisputesController {
   @ApiQuery({ name: 'status', required: false, enum: DisputeStatus })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  findAll(
-    @Query('status') status?: DisputeStatus,
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-  ) {
-    return this.disputesService.findAll(page, limit, status);
+  findAll(@Query() query: DisputeQueryDto) {
+    return this.disputesService.findAll(
+      query?.page,
+      query?.limit,
+      query?.status,
+    );
   }
 
   @Get(':id')
