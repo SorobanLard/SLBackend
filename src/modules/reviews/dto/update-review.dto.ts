@@ -1,4 +1,4 @@
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, Min, MaxLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class UpdateReviewDto {
@@ -12,5 +12,6 @@ export class UpdateReviewDto {
   @ApiProperty({ required: false, example: 'Updated thoughts on the course.' })
   @IsOptional()
   @IsString()
+  @MaxLength(1000, { message: 'Comment must not exceed 1000 characters' })
   comment?: string;
 }

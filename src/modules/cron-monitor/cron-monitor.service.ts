@@ -137,11 +137,10 @@ export class CronMonitorService {
     const where: Prisma.CronJobRunWhereInput = {};
     if (query.jobName) where.jobName = query.jobName;
     if (query.status) where.status = query.status;
-    if (query.from || query.to) {
-      where.startedAt = {};
-      if (query.from) where.startedAt.gte = new Date(query.from);
-      if (query.to) where.startedAt.lte = new Date(query.to);
-    }
+    const defaultFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    where.startedAt = {};
+    where.startedAt.gte = query.from ? new Date(query.from) : defaultFrom;
+    if (query.to) where.startedAt.lte = new Date(query.to);
 
     const [data, total] = await Promise.all([
       this.prisma.cronJobRun.findMany({

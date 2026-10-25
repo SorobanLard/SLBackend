@@ -133,6 +133,14 @@ export class RefundsService {
 
   async approve(id: string, adminId: string, dto: ApproveRefundDto) {
     const refund = await this.getPendingOrThrow(id);
+
+    const allowedTransitions = this.getAllowedRefundTransitions(refund.status);
+    if (!allowedTransitions.includes(RefundStatus.APPROVED)) {
+      throw new BadRequestException(
+        `Cannot transition refund from ${refund.status} to APPROVED. Allowed transitions: ${allowedTransitions.join(', ')}`,
+      );
+    }
+
     const enrollment = await this.prisma.enrollment.findUniqueOrThrow({
       where: { id: refund.enrollmentId },
     });
@@ -158,7 +166,15 @@ export class RefundsService {
   }
 
   async reject(id: string, adminId: string, dto: RejectRefundDto) {
-    await this.getPendingOrThrow(id);
+    const refund = await this.getPendingOrThrow(id);
+
+    const allowedTransitions = this.getAllowedRefundTransitions(refund.status);
+    if (!allowedTransitions.includes(RefundStatus.REJECTED)) {
+      throw new BadRequestException(
+        `Cannot transition refund from ${refund.status} to REJECTED. Allowed transitions: ${allowedTransitions.join(', ')}`,
+      );
+    }
+
     return this.prisma.refund.update({
       where: { id },
       data: { status: RefundStatus.REJECTED, adminNote: dto.reason },
@@ -168,8 +184,12 @@ export class RefundsService {
   async process(id: string, adminId: string, dto: ProcessRefundDto) {
     const refund = await this.prisma.refund.findUnique({ where: { id } });
     if (!refund) throw new NotFoundException('Refund not found');
-    if (refund.status !== RefundStatus.APPROVED) {
-      throw new BadRequestException('Only APPROVED refunds can be processed');
+
+    const allowedTransitions = this.getAllowedRefundTransitions(refund.status);
+    if (!allowedTransitions.includes(RefundStatus.PROCESSED)) {
+      throw new BadRequestException(
+        `Cannot transition refund from ${refund.status} to PROCESSED. Allowed transitions: ${allowedTransitions.join(', ')}`,
+      );
     }
 
     const txStatus = await this.stellar.getTransactionStatus(dto.txHash);
@@ -197,6 +217,16 @@ export class RefundsService {
 
     this.logger.log(`Refund processed: ${id} (${isFullRefund ? 'full' : 'partial'})`);
     return updatedRefund;
+  }
+
+  private getAllowedRefundTransitions(currentStatus: RefundStatus): RefundStatus[] {
+    const transitions: Record<RefundStatus, RefundStatus[]> = {
+      [RefundStatus.PENDING]: [RefundStatus.APPROVED, RefundStatus.REJECTED],
+      [RefundStatus.APPROVED]: [RefundStatus.PROCESSED],
+      [RefundStatus.REJECTED]: [],
+      [RefundStatus.PROCESSED]: [],
+    };
+    return transitions[currentStatus] || [];
   }
 
   private async getPendingOrThrow(id: string) {

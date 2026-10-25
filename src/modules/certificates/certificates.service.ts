@@ -1,15 +1,16 @@
 import {
   Injectable, NotFoundException, ForbiddenException, Logger,
-  BadRequestException,
+  BadRequestException, GoneException,
 } from '@nestjs/common';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { StellarService } from '../../common/stellar/stellar.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ExamsService } from '../exams/exams.service';
 import { NotificationType } from '@prisma/client';
-import { CertificateRenderData } from './certificate-template.types';
 import { v4 as uuidv4 } from 'uuid';
-import { CertificatePdfService } from '../certificates/certificate-pdf.service';
+import { Queue } from 'bullmq';
+import { InjectQueue } from '@nestjs/bullmq';
+import { CERTIFICATE_PDF_QUEUE, CERTIFICATE_PDF_JOB } from '../../common/queue/queue.constants';
 
 @Injectable()
 export class CertificatesService {
@@ -20,7 +21,7 @@ export class CertificatesService {
     private readonly stellar: StellarService,
     private readonly notifications: NotificationsService,
     private readonly examsService: ExamsService,
-    private readonly pdfService: CertificatePdfService,
+    @InjectQueue(CERTIFICATE_PDF_QUEUE) private readonly pdfQueue: Queue,
   ) {}
 
   /**
@@ -75,28 +76,15 @@ export class CertificatesService {
       include: { student: true, course: true },
     });
 
-    // Generate PDF certificate using the course's category for template lookup
-    const renderData: CertificateRenderData = {
-      studentName:       enrollment.student.name,
-      courseTitle:       enrollment.course.title,
-      certificateId,
-      issuedAt:          certificate.issuedAt,
-      category:          enrollment.course.category,
-    };
-
-    const pdfBuffer = await this.pdfService.renderForCategory(
-      enrollment.course.category,
-      renderData,
+    // Durable processing is handled by the BullMQ worker, not the HTTP request.
+    // A deterministic job id prevents duplicate PDF jobs on repeated calls.
+    await this.pdfQueue.add(
+      CERTIFICATE_PDF_JOB,
+      { certificateId },
+      { jobId: certificateId, attempts: 5, backoff: { type: 'exponential', delay: 5000 } },
     );
 
-    // Store PDF file reference (in production this would be uploaded to S3/cloud storage)
-    const pdfUrl = `certificates/${certificateId}.pdf`;
-    const updatedCert = await this.prisma.certificate.update({
-      where: { id: certificateId },
-      data: { pdfUrl },
-    });
-
-    this.logger.log(`Certificate issued: ${certificateId} for student ${studentId}, PDF: ${pdfUrl}`);
+    this.logger.log(`Certificate issued: ${certificateId} for student ${studentId}, PDF generation queued`);
 
     await this.notifications.notifyUser(
       studentId,
@@ -106,7 +94,7 @@ export class CertificatesService {
       { certificateId, courseId },
     );
 
-    return updatedCert;
+    return { ...certificate, pdfStatus: 'queued' };
   }
 
   /** Update the txHash after the admin calls issue_certificate() on-chain */
@@ -140,26 +128,48 @@ export class CertificatesService {
 
   /**
    * Public verification endpoint — checks both DB and on-chain state.
-   * Returns the certificate details if valid, or an error if revoked/not found.
+   *
+   * Returns a distinct state for each outcome:
+   *  - VALID:       certificate exists, is not revoked/fraud-held, and is valid on-chain
+   *  - REVOKED:     certificate exists but has been revoked (410 Gone)
+   *  - FRAUD_HELD:  certificate exists but is flagged as fraud-held (410 Gone)
+   *  - NOT_FOUND:   certificate does not exist (404)
    */
   async verify(certificateId: string) {
     const cert = await this.findById(certificateId);
 
     if (cert.isRevoked) {
-      return { valid: false, reason: 'Certificate has been revoked', certificate: null };
+      throw new GoneException({
+        status: 'REVOKED',
+        valid: false,
+        reason: 'Certificate has been revoked',
+        revokedAt: cert.revokedAt ?? null,
+        revokeReason: cert.revokeReason ?? null,
+        certificate: null,
+      });
+    }
+
+    if (cert.isFraudHeld) {
+      throw new GoneException({
+        status: 'FRAUD_HELD',
+        valid: false,
+        reason: 'Certificate is held pending fraud investigation',
+        certificate: null,
+      });
     }
 
     // Cross-check with on-chain state
     const onChainValid = await this.stellar.verifyCertificateOnChain(certificateId);
     if (!onChainValid) {
-      return {
+      throw new GoneException({
+        status: 'REVOKED',
         valid: false,
         reason: 'Certificate not found or revoked on-chain',
         certificate: null,
-      };
+      });
     }
 
-    return { valid: true, certificate: cert };
+    return { status: 'VALID', valid: true, certificate: cert };
   }
 
   async revoke(certificateId: string, adminId: string, reason?: string) {

@@ -96,7 +96,16 @@ export class EnrollmentsService {
         txHash,
         amountPaid,
       },
-      include: { course: true, student: true },
+      include: {
+        course: {
+          include: {
+            instructor: {
+              select: { id: true, name: true, email: true, stellarAddress: true },
+            },
+          },
+        },
+        student: true,
+      },
     });
 
     // ------------------------------------------------------------------
@@ -132,9 +141,7 @@ export class EnrollmentsService {
     );
 
     // Notify instructor
-    const instructor = await this.prisma.user.findUnique({
-      where: { stellarAddress: enrollment.course.instructorAddress },
-    });
+    const instructor = enrollment.course.instructor;
     if (instructor) {
       await this.notifications.notifyUser(
         instructor.id,
@@ -175,7 +182,24 @@ export class EnrollmentsService {
         where: { studentId },
         include: {
           course: {
-            include: { instructor: { select: { name: true, avatarUrl: true } } },
+            include: {
+              instructor: {
+                select: { id: true, name: true, email: true, avatarUrl: true, stellarAddress: true },
+              },
+            },
+          },
+          student: {
+            select: { id: true, name: true, email: true, stellarAddress: true, avatarUrl: true },
+          },
+          invoice: {
+            select: {
+              id: true,
+              invoiceNumber: true,
+              amount: true,
+              txHash: true,
+              issuedAt: true,
+              emailSent: true,
+            },
           },
         },
         orderBy: { enrolledAt: 'desc' },
@@ -187,16 +211,63 @@ export class EnrollmentsService {
     return { data: enrollments, meta: { total, page, limit } };
   }
 
+  async findByCourse(courseId: string, page = 1, limit = 20) {
+    const [enrollments, total] = await this.prisma.$transaction([
+      this.prisma.enrollment.findMany({
+        where: { courseId },
+        include: {
+          course: {
+            include: {
+              instructor: {
+                select: { id: true, name: true, email: true, avatarUrl: true, stellarAddress: true },
+              },
+            },
+          },
+          student: {
+            select: { id: true, name: true, email: true, stellarAddress: true, avatarUrl: true },
+          },
+          invoice: {
+            select: {
+              id: true,
+              invoiceNumber: true,
+              amount: true,
+              txHash: true,
+              issuedAt: true,
+              emailSent: true,
+            },
+          },
+        },
+        orderBy: { enrolledAt: 'desc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.enrollment.count({ where: { courseId } }),
+    ]);
+    return { data: enrollments, meta: { total, page, limit } };
+  }
+
   async findOne(studentId: string, courseId: string) {
     const enrollment = await this.prisma.enrollment.findUnique({
       where: { studentId_courseId: { studentId, courseId } },
       include: {
         course: {
           include: {
+            instructor: { select: { id: true, name: true, email: true, avatarUrl: true, stellarAddress: true } },
             modules: {
               orderBy: { position: 'asc' },
               include: { lessons: { orderBy: { position: 'asc' } } },
             },
+          },
+        },
+        student: { select: { id: true, name: true, email: true, stellarAddress: true, avatarUrl: true } },
+        invoice: {
+          select: {
+            id: true,
+            invoiceNumber: true,
+            amount: true,
+            txHash: true,
+            issuedAt: true,
+            emailSent: true,
           },
         },
         lessonProgress: true,

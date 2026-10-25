@@ -29,6 +29,7 @@ export class CoursesService {
     await Promise.all([
       this.cache.invalidateNamespace('courses:list'),
       this.cache.invalidateNamespace('courses:categories'),
+      this.cache.invalidateNamespace('courses:detail'),
     ]);
   }
 
@@ -173,6 +174,8 @@ export class CoursesService {
     limit?: number;
   }) {
     const { category, level, status, instructorAddress, search, page = 1, limit = 20 } = filters;
+    const pageNum = Math.max(1, Number(page) || 1);
+    const limitNum = Math.max(1, Math.min(100, Number(limit) || 20));
 
     const where: any = {};
     if (category)          where.category = category;
@@ -194,13 +197,23 @@ export class CoursesService {
           _count:     { select: { enrollments: true } },
         },
         orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
+        skip: (pageNum - 1) * limitNum,
+        take: limitNum,
       }),
       this.prisma.course.count({ where }),
     ]);
 
-    return { data: courses, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    const pageCount = Math.ceil(total / limitNum);
+    return {
+      data: courses,
+      meta: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        pageCount,
+        totalPages: pageCount,
+      },
+    };
   }
 
   async findOne(id: string) {

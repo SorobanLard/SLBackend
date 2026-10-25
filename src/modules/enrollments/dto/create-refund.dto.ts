@@ -1,5 +1,6 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsUsdcAmount } from '../../../common/validators/monetary.validator';
 
 export class CreateRefundDto {
   @ApiProperty({ description: 'ID of the enrollment being disputed / cancelled' })
@@ -11,8 +12,8 @@ export class CreateRefundDto {
   reason: string;
 
   @ApiPropertyOptional({
-    description: 'Amount requested in USDC. Defaults to the full amount paid for the enrollment.',
+    description: 'Amount requested in USDC (up to 7 decimals). Defaults to the full amount paid for the enrollment.',
   })
-  @IsOptional() @IsNumber() @Min(0.01)
+  @IsOptional() @IsUsdcAmount()
   requestedAmount?: number;
 }

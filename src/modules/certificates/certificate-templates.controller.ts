@@ -12,8 +12,12 @@ import {
   HttpStatus,
   Header,
   StreamableFile,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiProduces } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiProduces, ApiConsumes } from '@nestjs/swagger';
+import { validateFileMimeType } from './mime-validator';
 import { UserRole } from '@prisma/client';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { Roles, RolesGuard } from '../../common/guards/roles.guard';
@@ -112,5 +116,15 @@ export class CertificateTemplatesController {
   @ApiOperation({ summary: 'Deactivate a template without deleting it' })
   deactivate(@Param('id') id: string) {
     return this.templatesService.deactivate(id);
+  }
+
+  @Post('upload')
+  @HttpCode(HttpStatus.OK)
+  @UseInterceptors(FileInterceptor('file'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload and validate certificate template file' })
+  async uploadTemplateFile(@UploadedFile() file: Express.Multer.File) {
+    await validateFileMimeType(file.buffer, file.originalname);
+    return { message: 'File validated successfully', filename: file.originalname };
   }
 }

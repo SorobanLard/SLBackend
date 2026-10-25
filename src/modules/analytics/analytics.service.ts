@@ -61,11 +61,22 @@ export class AnalyticsService {
     };
   }
 
+  /** Require a narrow bounded range for high-volume analytics reads. */
+  private boundedRange(from?: string, to?: string) {
+    if (!from || !to) throw new BadRequestException('Both from and to are required for analytics reads');
+    const start = new Date(from);
+    const end = new Date(to);
+    if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start > end || end.getTime() - start.getTime() > 90 * 86400000) {
+      throw new BadRequestException('Analytics date range must be valid and at most 90 days');
+    }
+    return { gte: start, lte: end };
+  }
+
   /**
    * Aggregate event volume grouped by event type.
    */
   async getVolumeByEventType(from?: string, to?: string) {
-    const where: Prisma.AnalyticsEventWhereInput = {};
+    const where: Prisma.AnalyticsEventWhereInput = { occurredAt: this.boundedRange(from, to) };
     if (from || to) {
       where.occurredAt = {};
       if (from) where.occurredAt.gte = new Date(from);
@@ -101,7 +112,7 @@ export class AnalyticsService {
     const limit = Math.min(200, Math.max(1, query.limit ?? 50));
     const skip = (page - 1) * limit;
 
-    const where: Prisma.AnalyticsEventWhereInput = {};
+    const where: Prisma.AnalyticsEventWhereInput = { occurredAt: this.boundedRange(query.from, query.to) };
     if (query.eventType) where.eventType = query.eventType;
     if (query.userId) where.userId = query.userId;
     if (query.sessionId) where.sessionId = query.sessionId;
@@ -143,7 +154,7 @@ export class AnalyticsService {
   }> {
     const maxRows = 50000;
 
-    const where: Prisma.AnalyticsEventWhereInput = {};
+    const where: Prisma.AnalyticsEventWhereInput = { occurredAt: this.boundedRange(query.from, query.to) };
     if (query.eventType) where.eventType = query.eventType;
     if (query.userId) where.userId = query.userId;
     if (query.sessionId) where.sessionId = query.sessionId;

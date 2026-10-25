@@ -6,12 +6,14 @@ import { EnableTwoFactorDto, DisableTwoFactorDto } from './dto/two-factor.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { AuthSensitiveThrottle } from '../../common/decorators/auth-sensitive-throttle.decorator';
 import { UserRole } from '@prisma/client';
 
 @ApiTags('auth')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles(UserRole.ADMIN, UserRole.INSTRUCTOR)
+@AuthSensitiveThrottle()
 @Controller('auth/2fa')
 export class TwoFactorController {
   constructor(private readonly twoFactorService: TwoFactorService) {}

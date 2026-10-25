@@ -4,6 +4,7 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { EnrollmentsService } from '../enrollments/enrollments.service';
 import {
   EnrollmentConflictStrategy,
+  EnrollmentRestoreFailure,
   RestoreEnrollmentRecordDto,
   RestoreEnrollmentsDto,
   RestoreLessonProgressDto,
@@ -22,6 +23,7 @@ export interface EnrollmentRestoreCounts {
   enrollmentsSkipped: number;
   enrollmentsOverwritten: number;
   enrollmentsMerged: number;
+  enrollmentsFailed: number;
   progressRestored: number;
   progressSkipped: number;
   validationFailures: number;
@@ -33,6 +35,14 @@ export interface EnrollmentRestoreReport {
   conflictStrategy: EnrollmentConflictStrategy;
   counts: EnrollmentRestoreCounts;
   issues: EnrollmentRestoreValidationIssue[];
+  /**
+   * Best-effort policy: each enrollment record is processed independently.
+   * A failure on one record does not roll back records that already succeeded.
+   * These entries list the record IDs that failed so the admin UI can retry
+   * just the failures.
+   */
+  succeeded: string[];
+  failed: EnrollmentRestoreFailure[];
   createdAt: Date;
   completedAt: Date;
 }
@@ -50,6 +60,12 @@ export class EnrollmentRestoreService {
   /**
    * Restore enrollments + lesson progress from a backup payload.
    * Validates against the current course structure and resolves conflicts.
+   *
+   * Failure policy: BEST-EFFORT. Each enrollment record is processed in its
+   * own try/catch so a single bad record (e.g. FK violation on a deleted
+   * course) does not abort or roll back the rest of the batch. The returned
+   * report lists succeeded record IDs and failed entries (ID + reason) so the
+   * admin UI can retry only the failures.
    */
   async restore(
     requestedBy: string,
@@ -63,73 +79,100 @@ export class EnrollmentRestoreService {
       enrollmentsSkipped: 0,
       enrollmentsOverwritten: 0,
       enrollmentsMerged: 0,
+      enrollmentsFailed: 0,
       progressRestored: 0,
       progressSkipped: 0,
       validationFailures: 0,
     };
     const issues: EnrollmentRestoreValidationIssue[] = [];
+    const succeeded: string[] = [];
+    const failed: EnrollmentRestoreFailure[] = [];
     const createdAt = new Date();
 
     for (const record of dto.enrollments) {
-      const validation = await this.validateAgainstCourseStructure(record);
-      if (!validation.ok) {
-        counts.validationFailures += 1;
+      try {
+        const validation = await this.validateAgainstCourseStructure(record);
+        if (!validation.ok) {
+          counts.validationFailures += 1;
+          issues.push(...validation.issues);
+          counts.enrollmentsSkipped += 1;
+          failed.push({
+            id: record.id,
+            studentId: record.studentId,
+            courseId: record.courseId,
+            reason: validation.issues.map((i) => i.reason).join('; '),
+          });
+          continue;
+        }
+        // Collect soft validation warnings (e.g. orphan lesson ids)
         issues.push(...validation.issues);
-        counts.enrollmentsSkipped += 1;
-        continue;
-      }
-      // Collect soft validation warnings (e.g. orphan lesson ids)
-      issues.push(...validation.issues);
 
-      const mode =
-        strategy === EnrollmentConflictStrategy.OVERWRITE
-          ? 'overwrite'
-          : strategy === EnrollmentConflictStrategy.MERGE
-            ? 'merge'
-            : 'create';
+        const mode =
+          strategy === EnrollmentConflictStrategy.OVERWRITE
+            ? 'overwrite'
+            : strategy === EnrollmentConflictStrategy.MERGE
+              ? 'merge'
+              : 'create';
 
-      const result = await this.enrollments.upsertFromBackup({
-        id: record.id,
-        studentId: record.studentId,
-        courseId: record.courseId,
-        amountPaid: record.amountPaid,
-        txHash: record.txHash,
-        status: record.status,
-        progressPercent: record.progressPercent,
-        completedAt: record.completedAt
-          ? new Date(record.completedAt)
-          : null,
-        enrolledAt: record.enrolledAt
-          ? new Date(record.enrolledAt)
-          : undefined,
-        mode: mode === 'create' ? 'create' : mode,
-      });
+        const result = await this.enrollments.upsertFromBackup({
+          id: record.id,
+          studentId: record.studentId,
+          courseId: record.courseId,
+          amountPaid: record.amountPaid,
+          txHash: record.txHash,
+          status: record.status,
+          progressPercent: record.progressPercent,
+          completedAt: record.completedAt
+            ? new Date(record.completedAt)
+            : null,
+          enrolledAt: record.enrolledAt
+            ? new Date(record.enrolledAt)
+            : undefined,
+          mode: mode === 'create' ? 'create' : mode,
+        });
 
-      // When strategy is SKIP and record exists, upsert returns skipped
-      if (result.action === 'skipped') {
-        counts.enrollmentsSkipped += 1;
-      } else if (result.action === 'overwritten') {
-        counts.enrollmentsOverwritten += 1;
-        counts.enrollmentsRestored += 1;
-      } else if (result.action === 'merged') {
-        counts.enrollmentsMerged += 1;
-        counts.enrollmentsRestored += 1;
-      } else {
-        counts.enrollmentsRestored += 1;
-      }
+        // When strategy is SKIP and record exists, upsert returns skipped
+        if (result.action === 'skipped') {
+          counts.enrollmentsSkipped += 1;
+        } else if (result.action === 'overwritten') {
+          counts.enrollmentsOverwritten += 1;
+          counts.enrollmentsRestored += 1;
+        } else if (result.action === 'merged') {
+          counts.enrollmentsMerged += 1;
+          counts.enrollmentsRestored += 1;
+        } else {
+          counts.enrollmentsRestored += 1;
+        }
 
-      // For SKIP on existing enrollment, still allow progress restore when missing
-      if (record.lessonProgress?.length) {
-        const progressResult = await this.restoreLessonProgress(
-          result.enrollment.id,
-          record.courseId,
-          record.lessonProgress,
-          strategy,
-          validation.validLessonIds,
+        // For SKIP on existing enrollment, still allow progress restore when missing
+        if (record.lessonProgress?.length) {
+          const progressResult = await this.restoreLessonProgress(
+            result.enrollment.id,
+            record.courseId,
+            record.lessonProgress,
+            strategy,
+            validation.validLessonIds,
+          );
+          counts.progressRestored += progressResult.restored;
+          counts.progressSkipped += progressResult.skipped;
+          issues.push(...progressResult.issues);
+        }
+
+        succeeded.push(record.id);
+      } catch (error) {
+        // Best-effort: record the failure and continue with the next record.
+        counts.enrollmentsFailed += 1;
+        const reason =
+          error instanceof Error ? error.message : String(error);
+        failed.push({
+          id: record.id,
+          studentId: record.studentId,
+          courseId: record.courseId,
+          reason,
+        });
+        this.logger.warn(
+          `Enrollment restore failed for record ${record.id}: ${reason}`,
         );
-        counts.progressRestored += progressResult.restored;
-        counts.progressSkipped += progressResult.skipped;
-        issues.push(...progressResult.issues);
       }
     }
 
@@ -139,12 +182,14 @@ export class EnrollmentRestoreService {
       conflictStrategy: strategy,
       counts,
       issues,
+      succeeded,
+      failed,
       createdAt,
       completedAt: new Date(),
     };
     this.reports.set(report.id, report);
     this.logger.log(
-      `Enrollment restore ${report.id}: restored=${counts.enrollmentsRestored} skipped=${counts.enrollmentsSkipped}`,
+      `Enrollment restore ${report.id}: restored=${counts.enrollmentsRestored} skipped=${counts.enrollmentsSkipped} failed=${counts.enrollmentsFailed}`,
     );
     return report;
   }
@@ -268,37 +313,15 @@ export class EnrollmentRestoreService {
           data: { enrollmentId, lessonId: item.lessonId, ...data },
         });
         restored += 1;
-        continue;
-      }
-
-      if (strategy === EnrollmentConflictStrategy.SKIP) {
+      } else if (strategy === EnrollmentConflictStrategy.SKIP) {
         skipped += 1;
-        continue;
-      }
-
-      if (strategy === EnrollmentConflictStrategy.OVERWRITE) {
+      } else {
         await this.prisma.lessonProgress.update({
           where: { id: existing.id },
           data,
         });
         restored += 1;
-        continue;
       }
-
-      await this.prisma.lessonProgress.update({
-        where: { id: existing.id },
-        data: {
-          completed: existing.completed || data.completed,
-          watchedSecs: Math.max(existing.watchedSecs, data.watchedSecs),
-          completedAt:
-            existing.completedAt && data.completedAt
-              ? existing.completedAt < data.completedAt
-                ? existing.completedAt
-                : data.completedAt
-              : existing.completedAt ?? data.completedAt,
-        },
-      });
-      restored += 1;
     }
 
     return { restored, skipped, issues };

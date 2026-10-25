@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsEnum } from 'class-validator';
+import { IsString, IsNotEmpty, IsEnum, MaxLength } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { DisputeStatus } from '@prisma/client';
 
@@ -13,5 +13,6 @@ export class ResolveDisputeDto {
   @ApiProperty({ example: 'We reviewed the enrollment and confirmed a partial refund was issued.' })
   @IsString()
   @IsNotEmpty()
+  @MaxLength(3000, { message: 'Admin notes must not exceed 3000 characters' })
   adminNotes: string;
 }

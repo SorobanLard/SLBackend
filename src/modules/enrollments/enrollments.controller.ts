@@ -39,6 +39,16 @@ export class EnrollmentsController {
     return this.enrollmentsService.findByStudent(studentId, page, limit);
   }
 
+  @Get('course/:courseId')
+  @ApiOperation({ summary: 'Get all enrollments for a course with related student and payment data' })
+  findByCourse(
+    @Param('courseId') courseId: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return this.enrollmentsService.findByCourse(courseId, page, limit);
+  }
+
   @Get(':courseId')
   @ApiOperation({ summary: 'Get enrollment detail including progress for a specific course' })
   findOne(

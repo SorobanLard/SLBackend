@@ -6,6 +6,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger'
 import { CoursesService } from './courses.service';
 import { CreateCourseDto } from './dto/create-course.dto';
 import { UpdateCourseDto } from './dto/update-course.dto';
+import { QueryCoursesDto } from './dto/query-courses.dto';
 import { SetPrerequisitesDto } from './dto/set-prerequisites.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
@@ -26,21 +27,10 @@ export class CoursesController {
   @Get()
   @UseInterceptors(HttpCacheInterceptor)
   @Cacheable('courses:list', 60)
-  @ApiOperation({ summary: 'Browse active courses with filters' })
-  @ApiQuery({ name: 'category', required: false })
-  @ApiQuery({ name: 'level',    required: false })
-  @ApiQuery({ name: 'search',   required: false })
-  @ApiQuery({ name: 'page',     required: false, type: Number })
-  @ApiQuery({ name: 'limit',    required: false, type: Number })
-  findAll(
-    @Query('category') category?: string,
-    @Query('level')    level?: string,
-    @Query('search')   search?: string,
-    @Query('page')     page?: number,
-    @Query('limit')    limit?: number,
-  ) {
+  @ApiOperation({ summary: 'Browse active courses with pagination and filters' })
+  findAll(@Query() query: QueryCoursesDto) {
     return this.coursesService.findAll({
-      category, level, search, page, limit,
+      ...query,
       status: CourseStatus.ACTIVE,
     });
   }
@@ -52,6 +42,8 @@ export class CoursesController {
   getCategories() { return this.coursesService.getCategories(); }
 
   @Get(':id')
+  @UseInterceptors(HttpCacheInterceptor)
+  @Cacheable('courses:detail', 120)
   @ApiOperation({ summary: 'Get full course detail including modules and lessons' })
   findOne(@Param('id') id: string) { return this.coursesService.findOne(id); }
 
@@ -115,9 +107,12 @@ export class CoursesController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(UserRole.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'List all pending courses awaiting approval' })
-  getPending() {
-    return this.coursesService.findAll({ status: CourseStatus.PENDING });
+  @ApiOperation({ summary: 'List all pending courses awaiting approval with pagination' })
+  getPending(@Query() query: QueryCoursesDto) {
+    return this.coursesService.findAll({
+      ...query,
+      status: CourseStatus.PENDING,
+    });
   }
 
   @Post(':id/approve')

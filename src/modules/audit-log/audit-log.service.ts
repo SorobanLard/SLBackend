@@ -28,8 +28,8 @@ export class AuditLogService {
   }
 
   async findAll(query: QueryAuditLogDto) {
-    const page = query.page ?? 1;
-    const limit = query.limit ?? 10;
+    const page = Math.max(1, query.page ?? 1);
+    const limit = Math.min(200, Math.max(1, query.limit ?? 50));
     const skip = (page - 1) * limit;
 
     const where: any = {};
@@ -38,11 +38,10 @@ export class AuditLogService {
     if (query.targetType) where.targetType = query.targetType;
     if (query.targetId) where.targetId = query.targetId;
 
-    if (query.from || query.to) {
-      where.createdAt = {};
-      if (query.from) where.createdAt.gte = new Date(query.from);
-      if (query.to) where.createdAt.lte = new Date(query.to);
-    }
+    const defaultFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    where.createdAt = {};
+    where.createdAt.gte = query.from ? new Date(query.from) : defaultFrom;
+    if (query.to) where.createdAt.lte = new Date(query.to);
 
     const [data, total] = await Promise.all([
       this.prisma.adminAuditLog.findMany({
@@ -88,25 +87,35 @@ export class AuditLogService {
     if (query.targetType) where.targetType = query.targetType;
     if (query.targetId) where.targetId = query.targetId;
 
-    if (query.from || query.to) {
-      where.createdAt = {};
-      if (query.from) where.createdAt.gte = new Date(query.from);
-      if (query.to) where.createdAt.lte = new Date(query.to);
-    }
+    const defaultFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    where.createdAt = {};
+    where.createdAt.gte = query.from ? new Date(query.from) : defaultFrom;
+    if (query.to) where.createdAt.lte = new Date(query.to);
 
-    const entries = await this.prisma.adminAuditLog.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      include: {
-        actor: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
+    // Export in bounded batches so a large history does not require one
+    // unbounded Prisma result set in memory.
+    const entries: any[] = [];
+    let skip = 0;
+    while (true) {
+      const batch = await this.prisma.adminAuditLog.findMany({
+        where,
+        skip,
+        take: batchSize,
+        orderBy: { createdAt: 'desc' },
+        include: {
+          actor: {
+            select: {
+              id: true,
+              name: true,
+              email: true,
+            },
           },
         },
-      },
-    });
+      });
+      entries.push(...batch);
+      if (batch.length < batchSize) break;
+      skip += batch.length;
+    }
 
     const csv = this.toCsvString(entries);
     return { csv, rowCount: entries.length };

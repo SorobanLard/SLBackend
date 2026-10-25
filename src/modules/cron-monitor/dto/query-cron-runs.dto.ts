@@ -1,4 +1,4 @@
-import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsEnum, IsInt, IsOptional, IsString, Max, Min, IsDateString } from 'class-validator';
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { CronJobStatus } from '@prisma/client';
@@ -16,12 +16,12 @@ export class QueryCronRunsDto {
 
   @ApiPropertyOptional({ description: 'ISO date-time lower bound for startedAt' })
   @IsOptional()
-  @IsString()
+  @IsDateString()
   from?: string;
 
   @ApiPropertyOptional({ description: 'ISO date-time upper bound for startedAt' })
   @IsOptional()
-  @IsString()
+  @IsDateString()
   to?: string;
 
   @ApiPropertyOptional({ default: 1, minimum: 1 })

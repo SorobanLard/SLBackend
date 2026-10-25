@@ -1,4 +1,4 @@
-import { IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import { IsEnum, IsOptional, IsString, Min, Max, IsInt, IsDateString } from 'class-validator';
 import { Type } from 'class-transformer';
 import { AuditAction, AuditTargetType } from '@prisma/client';
 
@@ -20,22 +20,23 @@ export class QueryAuditLogDto {
   targetId?: string;
 
   @IsOptional()
-  @IsString()
+  @IsDateString()
   from?: string;
 
   @IsOptional()
-  @IsString()
+  @IsDateString()
   to?: string;
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsInt()
   @Min(1)
   page?: number;
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
+  @IsInt()
   @Min(1)
+  @Max(200)
   limit?: number;
 }

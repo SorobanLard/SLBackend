@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { CacheService } from '../../common/cache/cache.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { LeaderboardQueryDto, LeaderboardScope } from './dto/leaderboard-query.dto';
 
@@ -17,56 +18,57 @@ export interface LeaderboardEntry {
 export class LeaderboardService {
   private readonly logger = new Logger(LeaderboardService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly cache: CacheService) {}
 
   async getLeaderboard(query: LeaderboardQueryDto) {
     if (query.scope === LeaderboardScope.COURSE && !query.courseId) {
       throw new BadRequestException('courseId is required when scope is course');
     }
 
-    const limit = query.limit && query.limit > 0 ? query.limit : 10;
-    const page = query.page && query.page > 0 ? query.page : 1;
-
+    const limit = Math.min(100, Math.max(1, query.limit ?? 10));
+    const page = Math.max(1, query.page ?? 1);
     const courseId = query.scope === LeaderboardScope.COURSE ? query.courseId : null;
-    const snapshots = await this.prisma.leaderboardSnapshot.findMany({
-      where: {
-        scope: query.scope,
-        courseId,
-      },
+    const cacheKey = this.cache.buildKey('leaderboard', {
+      scope: query.scope, courseId, page, limit,
     });
-    const previousRanks = new Map<string, number>(
-      snapshots.map((s) => [s.userId, s.rank]),
-    );
+    const cached = await this.cache.get<{
+      data: LeaderboardEntry[]; total: number; page: number; limit: number;
+      scope: LeaderboardScope; courseId: string | null;
+    }>(cacheKey);
+    if (cached) return cached;
 
-    const rankedStudents = await this.calculateStudentPoints(query.scope, query.courseId);
+    // Reads use the materialized snapshot only; the expensive points aggregation
+    // runs in the scheduled recalculation job, not on the request path.
+    const where = { scope: query.scope, courseId };
+    const [snapshots, total] = await Promise.all([
+      this.prisma.leaderboardSnapshot.findMany({
+        where,
+        orderBy: { rank: 'asc' },
+        skip: (page - 1) * limit,
+        take: limit,
+        include: { user: { select: { name: true, avatarUrl: true, stellarAddress: true } } },
+      }),
+      this.prisma.leaderboardSnapshot.count({ where }),
+    ]);
 
-    const entries: LeaderboardEntry[] = rankedStudents.map((student, index) => {
-      const currentRank = index + 1;
-      const prevRank = previousRanks.has(student.userId) ? previousRanks.get(student.userId)! : null;
-      const rankChange = prevRank !== null ? prevRank - currentRank : 0;
-
-      return {
-        userId: student.userId,
-        name: student.name,
-        avatarUrl: student.avatarUrl,
-        points: student.points,
-        currentRank,
-        previousRank: prevRank,
-        rankChange,
-      };
-    });
-
-    const skip = (page - 1) * limit;
-    const paginatedEntries = entries.slice(skip, skip + limit);
-
-    return {
-      data: paginatedEntries,
-      total: entries.length,
+    const result = {
+      data: snapshots.map((snapshot) => ({
+        userId: snapshot.userId,
+        name: snapshot.user.name ?? snapshot.user.stellarAddress ?? 'Learner',
+        avatarUrl: snapshot.user.avatarUrl,
+        points: snapshot.points,
+        currentRank: snapshot.rank,
+        previousRank: snapshot.previousRank,
+        rankChange: snapshot.previousRank !== null ? snapshot.previousRank - snapshot.rank : 0,
+      })),
+      total,
       page,
       limit,
       scope: query.scope,
-      courseId: query.courseId,
+      courseId,
     };
+    await this.cache.set(cacheKey, result, 300);
+    return result;
   }
 
   @Cron(CronExpression.EVERY_HOUR)
@@ -79,9 +81,14 @@ export class LeaderboardService {
   async recalculateRankings() {
     const computedAt = new Date();
 
-    // 1. Recalculate Global rankings
+    // 1. Recalculate Global rankings, preserving the previous rank for movement.
     const globalRankings = await this.calculateStudentPoints(LeaderboardScope.GLOBAL);
     await this.prisma.$transaction(async (tx) => {
+      const old = await tx.leaderboardSnapshot.findMany({
+        where: { scope: LeaderboardScope.GLOBAL, courseId: null },
+        select: { userId: true, rank: true },
+      });
+      const oldRanks = new Map(old.map((row) => [row.userId, row.rank]));
       await tx.leaderboardSnapshot.deleteMany({
         where: { scope: LeaderboardScope.GLOBAL, courseId: null },
       });
@@ -91,14 +98,16 @@ export class LeaderboardService {
             scope: LeaderboardScope.GLOBAL,
             courseId: null,
             userId: student.userId,
+            points: student.points,
             rank: index + 1,
+            previousRank: oldRanks.get(student.userId) ?? null,
             computedAt,
           })),
         });
       }
     });
 
-    // 2. Recalculate Course-level rankings
+    // 2. Recalculate Course-level rankings.
     const activeCourses = await this.prisma.course.findMany({
       select: { id: true },
     });
@@ -106,6 +115,11 @@ export class LeaderboardService {
     for (const course of activeCourses) {
       const courseRankings = await this.calculateStudentPoints(LeaderboardScope.COURSE, course.id);
       await this.prisma.$transaction(async (tx) => {
+        const old = await tx.leaderboardSnapshot.findMany({
+          where: { scope: LeaderboardScope.COURSE, courseId: course.id },
+          select: { userId: true, rank: true },
+        });
+        const oldRanks = new Map(old.map((row) => [row.userId, row.rank]));
         await tx.leaderboardSnapshot.deleteMany({
           where: { scope: LeaderboardScope.COURSE, courseId: course.id },
         });
@@ -115,7 +129,9 @@ export class LeaderboardService {
               scope: LeaderboardScope.COURSE,
               courseId: course.id,
               userId: student.userId,
+              points: student.points,
               rank: index + 1,
+              previousRank: oldRanks.get(student.userId) ?? null,
               computedAt,
             })),
           });
@@ -123,6 +139,7 @@ export class LeaderboardService {
       });
     }
 
+    await this.cache.invalidateNamespace('leaderboard');
     return { status: 'recalculated', coursesCount: activeCourses.length };
   }
 
@@ -187,6 +204,6 @@ export class LeaderboardService {
       };
     });
 
-    return studentPoints.sort((a, b) => b.points - a.points);
+    return studentPoints.sort((a, b) => b.points - a.points || a.userId.localeCompare(b.userId));
   }
 }

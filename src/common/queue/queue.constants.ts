@@ -29,3 +29,6 @@ export const VIDEO_PROCESSING_JOB_OPTIONS = {
   removeOnComplete: 1_000,
   removeOnFail: false,
 };
+
+export const CERTIFICATE_PDF_QUEUE = 'certificate-pdf';
+export const CERTIFICATE_PDF_JOB = 'render-certificate-pdf';

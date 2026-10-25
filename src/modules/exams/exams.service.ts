@@ -167,6 +167,17 @@ export class ExamsService {
       throw new BadRequestException('Exam contains no questions');
     }
 
+    const validQuestionIds = new Set(questions.map((q) => q.id));
+    const submittedQuestionIds = Object.keys(dto.answers);
+
+    for (const submittedId of submittedQuestionIds) {
+      if (!validQuestionIds.has(submittedId)) {
+        throw new BadRequestException(
+          `Question ID ${submittedId} does not belong to exam ${examId}`,
+        );
+      }
+    }
+
     let earnedPoints = 0;
     let totalPoints = 0;
 

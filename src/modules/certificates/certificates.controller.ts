@@ -1,8 +1,10 @@
 import {
   Controller, Get, Post, Patch, Body, Param, UseGuards, HttpCode, HttpStatus,
-  Res,
-  NotFoundException,
+  Res, NotFoundException, GoneException,
 } from '@nestjs/common';
+import { InjectQueue } from '@nestjs/bullmq';
+import { Queue } from 'bullmq';
+import { CERTIFICATE_PDF_QUEUE } from '../../common/queue/queue.constants';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { CertificatesService } from './certificates.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -19,13 +21,42 @@ import {
 @ApiTags('certificates')
 @Controller('certificates')
 export class CertificatesController {
-  constructor(private readonly certificatesService: CertificatesService) {}
+  constructor(private readonly certificatesService: CertificatesService,
+    @InjectQueue(CERTIFICATE_PDF_QUEUE) private readonly pdfQueue: Queue) {}
 
   /** Public — no auth needed. Anyone can verify a certificate by ID. */
   @Get('verify/:id')
   @ApiOperation({ summary: 'Verify a certificate by ID (public, no auth required)' })
-  verify(@Param('id') id: string) {
-    return this.certificatesService.verify(id);
+  async verify(@Param('id') id: string) {
+    const certificate = await this.certificatesService.verify(id);
+
+    if (!certificate) {
+      throw new NotFoundException('Certificate not found');
+    }
+
+    if (certificate.isFraudHeld) {
+      return {
+        status: 'FRAUD_HELD',
+        valid: false,
+        certificate,
+      };
+    }
+
+    if (certificate.revokedAt) {
+      throw new GoneException({
+        status: 'REVOKED',
+        valid: false,
+        message: 'Certificate has been revoked',
+        revokedAt: certificate.revokedAt,
+        reason: certificate.revokeReason ?? null,
+      });
+    }
+
+    return {
+      status: 'VALID',
+      valid: true,
+      certificate,
+    };
   }
 
   @Get(':id')
@@ -78,6 +109,18 @@ export class CertificatesController {
     @Body() dto?: RevokeCertificateDto,
   ) {
     return this.certificatesService.revoke(id, adminId, dto?.reason);
+  }
+
+  @Get(':id/status')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Poll certificate PDF rendering job status' })
+  async getPdfStatus(@Param('id') id: string) {
+    await this.certificatesService.findById(id);
+    const job = await this.pdfQueue.getJob(id);
+    if (!job) return { certificateId: id, status: 'not_queued' };
+    const status = await job.getState();
+    return { certificateId: id, status, pdfUrl: status === 'completed' ? job.returnvalue?.pdfUrl : null };
   }
 
   @Get(':id/download')

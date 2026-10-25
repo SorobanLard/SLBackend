@@ -622,6 +622,7 @@ model Enrollment {
   dripUnlocks    EnrollmentLessonUnlock[]
 
   @@unique([studentId, courseId])
+  @@index([studentId, enrolledAt])
   @@map("enrollments")
 }
 
@@ -1571,6 +1572,7 @@ model AdminAuditLog {
   @@index([action])
   @@index([targetType, targetId])
   @@index([createdAt])
+  @@index([actorId, createdAt])
   @@map("admin_audit_logs")
 }
 
@@ -1827,6 +1829,8 @@ model LeaderboardSnapshot {
   courseId   String?
   userId     String
   rank       Int
+  points     Int      @default(0)
+  previousRank Int?
   computedAt DateTime @default(now())
 
   // Relations

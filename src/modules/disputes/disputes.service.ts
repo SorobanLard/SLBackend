@@ -128,21 +128,10 @@ export class DisputesService {
   async resolve(id: string, adminId: string, dto: ResolveDisputeDto) {
     const dispute = await this.findOne(id);
 
-    const resolvableStatuses: DisputeStatus[] = [DisputeStatus.OPEN, DisputeStatus.UNDER_REVIEW];
-    if (!resolvableStatuses.includes(dispute.status)) {
+    const allowedTransitions = this.getAllowedDisputeTransitions(dispute.status);
+    if (!allowedTransitions.includes(dto.status)) {
       throw new BadRequestException(
-        'Only OPEN or UNDER_REVIEW disputes can be resolved',
-      );
-    }
-
-    const resolvedStatuses: DisputeStatus[] = [
-      DisputeStatus.RESOLVED,
-      DisputeStatus.REJECTED,
-      DisputeStatus.CLOSED,
-    ];
-    if (!resolvedStatuses.includes(dto.status)) {
-      throw new BadRequestException(
-        'Resolution status must be RESOLVED, REJECTED, or CLOSED',
+        `Cannot transition dispute from ${dispute.status} to ${dto.status}. Allowed transitions: ${allowedTransitions.join(', ')}`,
       );
     }
 
@@ -156,7 +145,6 @@ export class DisputesService {
       },
     });
 
-    // Notify the student who filed the dispute
     await this.notifications.notifyUser(
       dispute.filedById,
       NotificationType.DISPUTE_RESOLVED,
@@ -167,6 +155,17 @@ export class DisputesService {
 
     this.logger.log(`Dispute ${id} resolved as ${dto.status} by admin ${adminId}`);
     return updated;
+  }
+
+  private getAllowedDisputeTransitions(currentStatus: DisputeStatus): DisputeStatus[] {
+    const transitions: Record<DisputeStatus, DisputeStatus[]> = {
+      [DisputeStatus.OPEN]: [DisputeStatus.UNDER_REVIEW, DisputeStatus.RESOLVED, DisputeStatus.REJECTED, DisputeStatus.CLOSED],
+      [DisputeStatus.UNDER_REVIEW]: [DisputeStatus.RESOLVED, DisputeStatus.REJECTED, DisputeStatus.CLOSED],
+      [DisputeStatus.RESOLVED]: [],
+      [DisputeStatus.REJECTED]: [],
+      [DisputeStatus.CLOSED]: [],
+    };
+    return transitions[currentStatus] || [];
   }
 
   // ----------------------------------------------------------

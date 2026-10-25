@@ -102,13 +102,11 @@ export class QueryAnalyticsEventsDto {
   @IsString()
   sessionId?: string;
 
-  @ApiPropertyOptional({ description: 'ISO start datetime filter' })
-  @IsOptional()
+  @ApiPropertyOptional({ description: 'Required ISO start; queries limited to 90 days' })
   @IsDateString()
   from?: string;
 
-  @ApiPropertyOptional({ description: 'ISO end datetime filter' })
-  @IsOptional()
+  @ApiPropertyOptional({ description: 'Required ISO end; queries limited to 90 days' })
   @IsDateString()
   to?: string;
 
