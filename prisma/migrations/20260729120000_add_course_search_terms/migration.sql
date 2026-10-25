@@ -18,3 +18,8 @@ CREATE INDEX "course_search_terms_searchCount_idx" ON "course_search_terms"("sea
 
 -- CreateIndex
 CREATE INDEX "course_search_terms_lastSearchedAt_idx" ON "course_search_terms"("lastSearchedAt");
+
+-- CreateIndex
+-- Composite index supporting the Postgres-side structured filters used by the
+-- course search path (category, price range, instructor, published status).
+CREATE INDEX "Course_published_category_instructorId_price_idx" ON "Course"("published", "category", "instructorId", "price");
