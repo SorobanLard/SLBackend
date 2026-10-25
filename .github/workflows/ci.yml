@@ -4,24 +4,81 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
 jobs:
-  build:
+  test:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      # Node version is pinned in .nvmrc so local (nvm use) and CI stay consistent.
-      - uses: actions/setup-node@v4
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: slbackend_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
         with:
-          node-version-file: .nvmrc
-          cache: npm
+          node-version: '18'
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Build
+      - name: Run linter
+        run: npm run lint
+
+      - name: Check OpenAPI/Swagger controller coverage
+        run: |
+          MISSING_CONTROLLERS=$(grep -rL "ApiTags" src/modules --include="*.controller.ts" || true)
+          if [ -n "$MISSING_CONTROLLERS" ]; then
+            echo "Error: Controllers missing the @ApiTags decorator:"
+            echo "$MISSING_CONTROLLERS"
+            exit 1
+          fi
+
+      - name: Run Prisma migration
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/slbackend_test
+        run: npx prisma migrate deploy
+
+      - name: Check Prisma schema drift
+        run: |
+          npx prisma migrate diff \
+            --from-migrations prisma/migrations \
+            --to-schema-datamodel prisma/schema.prisma \
+            --exit-code
+
+      - name: Build project
         run: npm run build
 
-      - name: Check engines
-        run: node --version
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/slbackend_test
+          REDIS_HOST: localhost
+          REDIS_PORT: 6379
+          JWT_SECRET: test-secret
+          NODE_ENV: test
+        run: npm run test
