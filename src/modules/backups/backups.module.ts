@@ -8,6 +8,8 @@ import { RestoreController } from "./restore.controller";
 import { RestoreService } from "./restore.service";
 import { DB_BACKUP_S3_CLIENT } from "./backups.constants";
 import { DbBackupService } from "./db-backup.service";
+import { DbBackupVerificationController } from "./db-backup-verification.controller";
+import { DbBackupVerificationService } from "./db-backup-verification.service";
 
 import { BackupsController } from "./backups.controller";
 import { BackupsService } from "./backups.service";
@@ -18,6 +20,7 @@ import { BackupsService } from "./backups.service";
     EnrollmentRestoreController,
     RestoreController,
     BackupsController,
+    DbBackupVerificationController,
   ],
   providers: [
     EnrollmentRestoreService,
@@ -36,11 +39,13 @@ import { BackupsService } from "./backups.service";
       },
     },
     DbBackupService,
+    DbBackupVerificationService,
   ],
   exports: [
     EnrollmentRestoreService,
     RestoreService,
     DbBackupService,
+    DbBackupVerificationService,
     BackupsService,
   ],
 })
