@@ -4,6 +4,7 @@ import {
   HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import { Throttle } from '@nestjs/throttler';
 import { memoryStorage } from 'multer';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { KycService } from './kyc.service';
@@ -11,9 +12,14 @@ import { SubmitKycDto } from './dto/submit-kyc.dto';
 import { ReviewKycDto } from './dto/review-kyc.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
+import { RoleThrottlerGuard } from '../../common/guards/role-throttler.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { KycStatus, UserRole } from '@prisma/client';
 import { QueryKycDto } from './dto/query-kyc.dto';
+
+/** Rate-limit constants for KYC identity document submission and admin review. */
+export const KYC_SUBMIT_THROTTLE = { limit: 5, ttl: 60_000 } as const;
+export const KYC_REVIEW_THROTTLE = { limit: 30, ttl: 60_000 } as const;
 
 @ApiTags('kyc')
 @ApiBearerAuth()
@@ -27,7 +33,8 @@ export class KycController {
   // ----------------------------------------------------------
 
   @Post('submit')
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, RoleThrottlerGuard)
+  @Throttle({ default: KYC_SUBMIT_THROTTLE })
   @Roles(UserRole.INSTRUCTOR)
   @HttpCode(HttpStatus.CREATED)
   @UseInterceptors(
@@ -85,7 +92,8 @@ export class KycController {
   // ----------------------------------------------------------
 
   @Get()
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, RoleThrottlerGuard)
+  @Throttle({ default: KYC_REVIEW_THROTTLE })
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'List all KYC submissions (admin only)' })
   @ApiQuery({ name: 'status', required: false, enum: KycStatus })
@@ -96,7 +104,8 @@ export class KycController {
   }
 
   @Get(':id')
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, RoleThrottlerGuard)
+  @Throttle({ default: KYC_REVIEW_THROTTLE })
   @Roles(UserRole.ADMIN)
   @ApiOperation({ summary: 'Get a single KYC submission detail (admin only)' })
   findOne(@Param('id') id: string) {
@@ -104,7 +113,8 @@ export class KycController {
   }
 
   @Post(':id/review')
-  @UseGuards(RolesGuard)
+  @UseGuards(RolesGuard, RoleThrottlerGuard)
+  @Throttle({ default: KYC_REVIEW_THROTTLE })
   @Roles(UserRole.ADMIN)
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Approve or reject a KYC submission (admin only)' })

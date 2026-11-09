@@ -1,10 +1,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
+import { ConfigService } from '@nestjs/config';
 import { KycStatus, UserRole } from '@prisma/client';
-import { KycController } from './kyc.controller';
+import {
+  KycController,
+  KYC_REVIEW_THROTTLE,
+  KYC_SUBMIT_THROTTLE,
+} from './kyc.controller';
 import { KycService } from './kyc.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, ROLES_KEY } from '../../common/guards/roles.guard';
+import { RoleThrottlerGuard } from '../../common/guards/role-throttler.guard';
 
 describe('KycController', () => {
   let controller: KycController;
@@ -18,10 +24,17 @@ describe('KycController', () => {
     review: jest.fn(),
   };
 
+  const mockConfigService = {
+    get: jest.fn((_key: string, defaultValue?: any) => defaultValue ?? 'test-secret'),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [KycController],
-      providers: [{ provide: KycService, useValue: mockKycService }],
+      providers: [
+        { provide: KycService, useValue: mockKycService },
+        { provide: ConfigService, useValue: mockConfigService },
+      ],
     }).compile();
 
     controller = module.get<KycController>(KycController);
@@ -38,14 +51,24 @@ describe('KycController', () => {
     const extra = { originalname: 'selfie.png' } as Express.Multer.File;
     mockKycService.submit.mockResolvedValue({ id: 'k1' });
 
-    expect(await controller.submit('inst-1', dto, { document: [doc], additional: [extra] })).toEqual({ id: 'k1' });
+    expect(
+      await controller.submit('inst-1', dto, {
+        document: [doc],
+        additional: [extra],
+      }),
+    ).toEqual({ id: 'k1' });
     expect(mockKycService.submit).toHaveBeenCalledWith('inst-1', dto, doc, extra);
   });
 
   it('submit handles missing files', async () => {
     const dto = {} as any;
     await controller.submit('inst-1', dto, undefined as any);
-    expect(mockKycService.submit).toHaveBeenCalledWith('inst-1', dto, undefined, undefined);
+    expect(mockKycService.submit).toHaveBeenCalledWith(
+      'inst-1',
+      dto,
+      undefined,
+      undefined,
+    );
   });
 
   it('findMy delegates to service', async () => {
@@ -62,8 +85,16 @@ describe('KycController', () => {
 
   it('findAll delegates with page, limit, status order', async () => {
     mockKycService.findAll.mockResolvedValue({ data: [] });
-    await controller.findAll(KycStatus.PENDING, 1, 20);
-    expect(mockKycService.findAll).toHaveBeenCalledWith(1, 20, KycStatus.PENDING);
+    await controller.findAll({
+      status: KycStatus.PENDING,
+      page: 1,
+      limit: 20,
+    });
+    expect(mockKycService.findAll).toHaveBeenCalledWith(
+      1,
+      20,
+      KycStatus.PENDING,
+    );
   });
 
   it('findOne delegates to service', async () => {
@@ -79,21 +110,61 @@ describe('KycController', () => {
     expect(mockKycService.review).toHaveBeenCalledWith('k1', 'admin-1', dto);
   });
 
-  describe('guard metadata', () => {
+  describe('guard & rate-limit metadata', () => {
     it('applies JwtAuthGuard at controller level', () => {
-      expect(Reflect.getMetadata(GUARDS_METADATA, KycController)).toEqual([JwtAuthGuard]);
+      expect(Reflect.getMetadata(GUARDS_METADATA, KycController)).toEqual([
+        JwtAuthGuard,
+      ]);
     });
 
-    it.each(['submit', 'findMy', 'getMyStatus'] as const)('%s is restricted to INSTRUCTOR', (method) => {
-      const handler = KycController.prototype[method];
-      expect(Reflect.getMetadata(GUARDS_METADATA, handler)).toEqual([RolesGuard]);
-      expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([UserRole.INSTRUCTOR]);
+    it('restricts submit to INSTRUCTOR and enforces RoleThrottlerGuard + @Throttle(5 req / 60s)', () => {
+      const handler = KycController.prototype.submit;
+      expect(Reflect.getMetadata(GUARDS_METADATA, handler)).toEqual([
+        RolesGuard,
+        RoleThrottlerGuard,
+      ]);
+      expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([
+        UserRole.INSTRUCTOR,
+      ]);
+      expect(Reflect.getMetadata('THROTTLER:LIMITdefault', handler)).toBe(
+        KYC_SUBMIT_THROTTLE.limit,
+      );
+      expect(Reflect.getMetadata('THROTTLER:TTLdefault', handler)).toBe(
+        KYC_SUBMIT_THROTTLE.ttl,
+      );
     });
 
-    it.each(['findAll', 'findOne', 'review'] as const)('%s is restricted to ADMIN', (method) => {
-      const handler = KycController.prototype[method];
-      expect(Reflect.getMetadata(GUARDS_METADATA, handler)).toEqual([RolesGuard]);
-      expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([UserRole.ADMIN]);
-    });
+    it.each(['findMy', 'getMyStatus'] as const)(
+      '%s is restricted to INSTRUCTOR',
+      (method) => {
+        const handler = KycController.prototype[method];
+        expect(Reflect.getMetadata(GUARDS_METADATA, handler)).toEqual([
+          RolesGuard,
+        ]);
+        expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([
+          UserRole.INSTRUCTOR,
+        ]);
+      },
+    );
+
+    it.each(['findAll', 'findOne', 'review'] as const)(
+      '%s is restricted to ADMIN and enforces RoleThrottlerGuard + @Throttle(30 req / 60s)',
+      (method) => {
+        const handler = KycController.prototype[method];
+        expect(Reflect.getMetadata(GUARDS_METADATA, handler)).toEqual([
+          RolesGuard,
+          RoleThrottlerGuard,
+        ]);
+        expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([
+          UserRole.ADMIN,
+        ]);
+        expect(Reflect.getMetadata('THROTTLER:LIMITdefault', handler)).toBe(
+          KYC_REVIEW_THROTTLE.limit,
+        );
+        expect(Reflect.getMetadata('THROTTLER:TTLdefault', handler)).toBe(
+          KYC_REVIEW_THROTTLE.ttl,
+        );
+      },
+    );
   });
 });
