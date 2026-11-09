@@ -53,20 +53,44 @@ export class OtpService {
   /**
    * Check rate limiting for OTP requests
    */
-  private checkRateLimit(phoneNumber: string): void {
+  private async checkRateLimit(phoneNumber: string): Promise<void> {
     const now = Date.now();
+    const windowMs = this.config.get<number>(
+      'OTP_RATE_LIMIT_WINDOW_MS',
+      OTP_RATE_LIMIT_WINDOW_MS,
+    );
+    const maxRequests = this.config.get<number>(
+      'OTP_RATE_LIMIT_MAX_REQUESTS',
+      OTP_RATE_LIMIT_MAX_REQUESTS,
+    );
+
+    if (typeof (this.prisma.phoneOtp as any)?.count === 'function') {
+      const windowStart = new Date(now - windowMs);
+      const recentCount = await (this.prisma.phoneOtp as any).count({
+        where: {
+          phoneNumber,
+          createdAt: { gte: windowStart },
+        },
+      });
+      if (recentCount >= maxRequests) {
+        throw new TooManyRequestsException(
+          `Too many OTP requests. Please try again in ${Math.ceil(windowMs / 1000)} seconds.`,
+        );
+      }
+    }
+
     const record = this.rateLimitMap.get(phoneNumber);
 
     if (!record || now > record.resetAt) {
       // Reset or create new rate limit window
       this.rateLimitMap.set(phoneNumber, {
         count: 1,
-        resetAt: now + OTP_RATE_LIMIT_WINDOW_MS,
+        resetAt: now + windowMs,
       });
       return;
     }
 
-    if (record.count >= OTP_RATE_LIMIT_MAX_REQUESTS) {
+    if (record.count >= maxRequests) {
       const remainingSeconds = Math.ceil((record.resetAt - now) / 1000);
       throw new TooManyRequestsException(
         `Too many OTP requests. Please try again in ${remainingSeconds} seconds.`,
@@ -81,7 +105,7 @@ export class OtpService {
    */
   async sendOtp(userId: string, phoneNumber: string, countryCode: string): Promise<void> {
     // Rate limit check
-    this.checkRateLimit(phoneNumber);
+    await this.checkRateLimit(phoneNumber);
 
     // Invalidate any existing unused OTPs for this user and phone
     await this.prisma.phoneOtp.updateMany({
@@ -166,8 +190,13 @@ export class OtpService {
       throw new UnauthorizedException('OTP has expired. Please request a new one.');
     }
 
-    // Check attempt count
-    if (otpRecord.attemptCount >= OTP_MAX_ATTEMPTS) {
+    const maxAttempts = this.config.get<number>(
+      'OTP_MAX_ATTEMPTS',
+      OTP_MAX_ATTEMPTS,
+    );
+
+    // Check attempt count (persisted in DB so lockout survives process restart)
+    if (otpRecord.attemptCount >= maxAttempts) {
       await this.prisma.phoneOtp.update({
         where: { id: otpRecord.id },
         data: { isUsed: true },
@@ -179,15 +208,16 @@ export class OtpService {
 
     // Verify OTP
     if (otpRecord.otp !== otpCode) {
-      // Increment attempt count
+      const nextAttemptCount = otpRecord.attemptCount + 1;
+      // Increment attempt count in DB (persisted across process restarts)
       await this.prisma.phoneOtp.update({
         where: { id: otpRecord.id },
         data: {
-          attemptCount: otpRecord.attemptCount + 1,
+          attemptCount: nextAttemptCount,
         },
       });
 
-      const remainingAttempts = OTP_MAX_ATTEMPTS - (otpRecord.attemptCount + 1);
+      const remainingAttempts = maxAttempts - nextAttemptCount;
       throw new UnauthorizedException(
         `Invalid OTP. ${remainingAttempts} attempts remaining.`,
       );

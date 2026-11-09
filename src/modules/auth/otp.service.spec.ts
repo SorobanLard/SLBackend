@@ -185,6 +185,48 @@ describe('OtpService', () => {
         service.verifyOtp('user-123', '+254712345678', '123456'),
       ).rejects.toThrow(UnauthorizedException);
     });
+
+    it('rejects the 6th attempt within the window even with the correct code and persists lockout across process restart', async () => {
+      const persistedOtpRow = {
+        ...mockOtpRecord,
+        otp: '123456',
+        attemptCount: 0,
+        isUsed: false,
+      };
+
+      mockPrismaService.phoneOtp.findFirst.mockImplementation(async () =>
+        persistedOtpRow.isUsed ? null : { ...persistedOtpRow },
+      );
+      mockPrismaService.phoneOtp.update.mockImplementation(
+        async ({ data }: { data: Partial<typeof persistedOtpRow> }) => {
+          Object.assign(persistedOtpRow, data);
+          return { ...persistedOtpRow };
+        },
+      );
+
+      // Attempts 1..5 with wrong OTP increment attemptCount server-side in DB
+      for (let i = 1; i <= 5; i++) {
+        await expect(
+          service.verifyOtp('user-123', '+254712345678', '000000'),
+        ).rejects.toThrow(`Invalid OTP. ${5 - i} attempts remaining.`);
+        expect(persistedOtpRow.attemptCount).toBe(i);
+      }
+
+      // Simulate process restart by instantiating a brand-new OtpService
+      const restartedService = new OtpService(
+        prisma,
+        mockConfigService as unknown as ConfigService,
+      );
+
+      // 6th attempt within the window uses the CORRECT OTP ('123456') -> must be rejected
+      await expect(
+        restartedService.verifyOtp('user-123', '+254712345678', '123456'),
+      ).rejects.toThrow(
+        'Maximum verification attempts exceeded. Please request a new OTP.',
+      );
+      expect(persistedOtpRow.isUsed).toBe(true);
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('getVerificationStatus', () => {
