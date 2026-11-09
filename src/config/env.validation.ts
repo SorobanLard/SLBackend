@@ -13,6 +13,7 @@ import {
   MinLength,
   validateSync,
 } from 'class-validator';
+import { IsStellarAddress } from '../common/validators/stellar-address.validator';
 
 export enum NodeEnv {
   Development = 'development',
@@ -153,21 +154,23 @@ export class EnvironmentVariables {
 
   @IsOptional()
   @IsString()
+  @IsStellarAddress({ allowContract: true })
   SOROBANLARD_CONTRACT_ID?: string;
 
   @IsOptional()
   @IsString()
+  @IsStellarAddress({ allowContract: true })
   USDC_TOKEN_ADDRESS?: string;
 
   @IsDefined()
-  @Matches(/^G[1-9A-HJ-NP-Za-km-z]{55}$/, {
-    message: 'ADMIN_STELLAR_ADDRESS must be a valid Stellar public key (starts with G, 56 chars)',
+  @IsStellarAddress({
+    message: 'ADMIN_STELLAR_ADDRESS must be a valid Stellar public key (starts with G, 56 chars, valid StrKey checksum)',
   })
   ADMIN_STELLAR_ADDRESS: string;
 
   @IsDefined()
-  @Matches(/^G[1-9A-HJ-NP-Za-km-z]{55}$/, {
-    message: 'TREASURY_STELLAR_ADDRESS must be a valid Stellar public key (starts with G, 56 chars)',
+  @IsStellarAddress({
+    message: 'TREASURY_STELLAR_ADDRESS must be a valid Stellar public key (starts with G, 56 chars, valid StrKey checksum)',
   })
   TREASURY_STELLAR_ADDRESS: string;
 

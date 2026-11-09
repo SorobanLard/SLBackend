@@ -6,9 +6,10 @@ import { AuthService } from './auth.service';
 import { CaptchaService } from './captcha.service';
 import { IsString, IsNotEmpty, IsOptional, IsIn } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
+import { IsStellarAddress } from '../../common/validators/stellar-address.validator';
 
-class LoginDto {
-  @ApiProperty() @IsString() @IsNotEmpty() stellarAddress: string;
+export class LoginDto {
+  @ApiProperty() @IsString() @IsNotEmpty() @IsStellarAddress() stellarAddress: string;
   @ApiProperty() @IsString() @IsNotEmpty() signedNonce: string;
   @ApiProperty() @IsString() @IsNotEmpty() signature: string;
   @ApiProperty({ required: false, enum: ['STUDENT', 'INSTRUCTOR'] })
@@ -87,4 +88,3 @@ export class AuthController {
     return this.authService.refresh(dto.refreshToken);
   }
 }
-
