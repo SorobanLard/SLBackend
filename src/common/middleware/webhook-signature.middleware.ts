@@ -42,6 +42,8 @@ const SIGNATURE_HEADERS = [
   'stripe-signature',        // Stripe (prefix format differs — handled below)
 ] as const;
 
+const HEX_SIGNATURE_REGEX = /^[0-9a-fA-F]+$/;
+
 /**
  * Strips the "sha256=" prefix used by GitHub-style providers and returns
  * only the hex portion. Returns the original string unchanged if no prefix.
@@ -60,16 +62,29 @@ function extractStripeHex(raw: string): string | null {
 }
 
 /**
- * Timing-safe hex comparison. Returns false if lengths differ (which would
- * ordinarily short-circuit, leaking information).
+ * Timing-safe hex comparison on buffers of equal byte length.
+ * Validates hex encoding and equal decoded byte lengths before invoking
+ * `crypto.timingSafeEqual` so malformed or mismatched-length inputs never
+ * cause a RangeError or early-exit character-by-character leak.
  */
-function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  try {
-    return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
-  } catch {
+export function safeCompare(a: string, b: string): boolean {
+  const cleanA = a.trim();
+  const cleanB = b.trim();
+  if (
+    cleanA.length === 0 ||
+    cleanA.length !== cleanB.length ||
+    cleanA.length % 2 !== 0 ||
+    !HEX_SIGNATURE_REGEX.test(cleanA) ||
+    !HEX_SIGNATURE_REGEX.test(cleanB)
+  ) {
     return false;
   }
+  const bufA = Buffer.from(cleanA, 'hex');
+  const bufB = Buffer.from(cleanB, 'hex');
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return timingSafeEqual(bufA, bufB);
 }
 
 @Injectable()
