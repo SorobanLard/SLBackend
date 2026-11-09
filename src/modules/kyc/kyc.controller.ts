@@ -4,7 +4,10 @@ import {
   HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
+import {
+  createMulterOptions,
+  DOCUMENT_ALLOWED_MIME_TYPES,
+} from '../../common/uploads/multer-options';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { KycService } from './kyc.service';
 import { SubmitKycDto } from './dto/submit-kyc.dto';
@@ -36,7 +39,7 @@ export class KycController {
         { name: 'document', maxCount: 1 },
         { name: 'additional', maxCount: 1 },
       ],
-      { storage: memoryStorage() },
+      createMulterOptions({ allowedMimeTypes: DOCUMENT_ALLOWED_MIME_TYPES }),
     ),
   )
   @ApiConsumes('multipart/form-data')

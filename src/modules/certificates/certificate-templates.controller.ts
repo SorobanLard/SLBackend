@@ -16,6 +16,10 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import {
+  CERTIFICATE_TEMPLATE_ALLOWED_MIME_TYPES,
+  createMulterOptions,
+} from '../../common/uploads/multer-options';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiProduces, ApiConsumes } from '@nestjs/swagger';
 import { validateFileMimeType } from './mime-validator';
 import { UserRole } from '@prisma/client';
@@ -120,7 +124,14 @@ export class CertificateTemplatesController {
 
   @Post('upload')
   @HttpCode(HttpStatus.OK)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(
+    FileInterceptor(
+      'file',
+      createMulterOptions({
+        allowedMimeTypes: CERTIFICATE_TEMPLATE_ALLOWED_MIME_TYPES,
+      }),
+    ),
+  )
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload and validate certificate template file' })
   async uploadTemplateFile(@UploadedFile() file: Express.Multer.File) {
