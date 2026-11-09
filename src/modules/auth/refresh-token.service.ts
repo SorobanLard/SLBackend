@@ -128,6 +128,7 @@ export class RefreshTokenService {
     }
 
     if (
+      payload.jti !== record.id ||
       payload.familyId !== record.familyId ||
       payload.sub !== record.userId ||
       payload.generation !== record.generation
@@ -147,9 +148,10 @@ export class RefreshTokenService {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
+    const consumedAt = new Date();
     const consumed = await this.prisma.refreshToken.updateMany({
       where: { id: record.id, consumedAt: null, revokedAt: null },
-      data: { consumedAt: new Date() },
+      data: { consumedAt },
     });
 
     if (consumed.count !== 1) {

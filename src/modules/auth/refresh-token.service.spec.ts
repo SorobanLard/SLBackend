@@ -208,13 +208,34 @@ describe('RefreshTokenService', () => {
       expect(mockPrisma.refreshToken.create).not.toHaveBeenCalled();
     });
 
-    it('prevents replay of a previously rotated token', async () => {
+    it('prevents replay of a previously rotated token and blocks descendant tokens in the revoked family', async () => {
+      const revokedTimestamp = new Date();
       mockPrisma.refreshToken.findUnique
         .mockResolvedValueOnce(activeRecord(1))
-        .mockResolvedValueOnce({ ...activeRecord(1), consumedAt: new Date() });
+        .mockResolvedValueOnce({ ...activeRecord(1), consumedAt: new Date() })
+        .mockResolvedValueOnce({ ...activeRecord(2), revokedAt: revokedTimestamp });
 
       const first = await service.rotate('refresh-1');
       expect(first.refreshToken).toBe('refresh-2');
+
+      // Attacker replays generation 1 token -> triggers family revocation
+      await expect(service.rotate('refresh-1')).rejects.toThrow('Refresh token reuse detected');
+      expect(mockPrisma.refreshToken.updateMany).toHaveBeenCalledWith({
+        where: { familyId: 'family-1', revokedAt: null },
+        data: { revokedAt: expect.any(Date) },
+      });
+
+      // Legitimate holder presenting generation 2 token is now forced to re-authenticate
+      await expect(service.rotate('refresh-2')).rejects.toThrow(
+        'Refresh token has been revoked',
+      );
+    });
+
+    it('revokes the family when a token jti does not match the stored record id', async () => {
+      mockPrisma.refreshToken.findUnique.mockResolvedValue({
+        ...activeRecord(1),
+        id: 'different-jti',
+      });
 
       await expect(service.rotate('refresh-1')).rejects.toThrow('Refresh token reuse detected');
       expect(mockPrisma.refreshToken.updateMany).toHaveBeenCalledWith({
