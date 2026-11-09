@@ -1,6 +1,8 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { AuditAction, AuditTargetType } from '@prisma/client';
 import { ImpersonationService } from './impersonation.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { AuditLogService } from '../audit-log/audit-log.service';
 import { JwtService } from '@nestjs/jwt';
 import { ForbiddenException, NotFoundException } from '@nestjs/common';
 
@@ -9,6 +11,14 @@ const mockAdminUser = {
   stellarAddress: 'GADMIN123',
   email: 'admin@sorobanlard.com',
   name: 'Admin User',
+  role: 'ADMIN',
+};
+
+const mockOtherAdminUser = {
+  id: 'admin-2',
+  stellarAddress: 'GADMIN456',
+  email: 'admin2@sorobanlard.com',
+  name: 'Second Admin',
   role: 'ADMIN',
 };
 
@@ -30,6 +40,10 @@ const mockJwtService = {
   sign: jest.fn().mockReturnValue('mock-impersonation-jwt-token'),
 };
 
+const mockAuditLogService = {
+  createEntry: jest.fn().mockResolvedValue({ id: 'audit-1' }),
+};
+
 describe('ImpersonationService', () => {
   let service: ImpersonationService;
 
@@ -39,6 +53,7 @@ describe('ImpersonationService', () => {
         ImpersonationService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: JwtService, useValue: mockJwtService },
+        { provide: AuditLogService, useValue: mockAuditLogService },
       ],
     }).compile();
 
@@ -47,7 +62,7 @@ describe('ImpersonationService', () => {
   });
 
   describe('startImpersonation()', () => {
-    it('starts impersonation session and returns scoped token and audit log', async () => {
+    it('starts impersonation session, embeds distinguishable JWT claims, and writes AuditLogService entry', async () => {
       mockPrisma.user.findUnique.mockImplementation(({ where }) => {
         if (where.id === 'admin-1') return Promise.resolve(mockAdminUser);
         if (where.id === 'user-1') return Promise.resolve(mockTargetUser);
@@ -63,6 +78,32 @@ describe('ImpersonationService', () => {
       expect(result.accessToken).toBe('mock-impersonation-jwt-token');
       expect(result.durationSeconds).toBe(1800);
       expect(result.targetUser.id).toBe('user-1');
+
+      expect(mockJwtService.sign).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sub: 'user-1',
+          stellarAddress: 'GUSER123',
+          role: 'STUDENT',
+          isImpersonating: true,
+          impersonatorId: 'admin-1',
+          sessionId: result.sessionId,
+        }),
+        { expiresIn: '1800s' },
+      );
+
+      expect(mockAuditLogService.createEntry).toHaveBeenCalledWith(
+        'admin-1',
+        expect.objectContaining({
+          action: AuditAction.IMPERSONATION_STARTED,
+          targetType: AuditTargetType.USER,
+          targetId: 'user-1',
+          metadata: expect.objectContaining({
+            sessionId: result.sessionId,
+            reason: 'Debugging student payment issue',
+            durationSeconds: 1800,
+          }),
+        }),
+      );
 
       const audit = service.getAuditTrail();
       expect(audit.total).toBe(1);
@@ -80,6 +121,25 @@ describe('ImpersonationService', () => {
       await expect(
         service.startImpersonation('user-1', { targetUserId: 'user-2' }),
       ).rejects.toThrow(ForbiddenException);
+      expect(mockAuditLogService.createEntry).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when attempting to impersonate another admin (privilege escalation)', async () => {
+      mockPrisma.user.findUnique.mockImplementation(({ where }) => {
+        if (where.id === 'admin-1') return Promise.resolve(mockAdminUser);
+        if (where.id === 'admin-2') return Promise.resolve(mockOtherAdminUser);
+        return Promise.resolve(null);
+      });
+
+      await expect(
+        service.startImpersonation('admin-1', {
+          targetUserId: 'admin-2',
+          reason: 'Escalation attempt',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(mockJwtService.sign).not.toHaveBeenCalled();
+      expect(mockAuditLogService.createEntry).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException if target user does not exist', async () => {
@@ -95,7 +155,7 @@ describe('ImpersonationService', () => {
   });
 
   describe('verifySession() and endSession()', () => {
-    it('verifies active session and ends it', async () => {
+    it('verifies active session, ends it, and writes IMPERSONATION_ENDED via AuditLogService', async () => {
       mockPrisma.user.findUnique.mockImplementation(({ where }) => {
         if (where.id === 'admin-1') return Promise.resolve(mockAdminUser);
         if (where.id === 'user-1') return Promise.resolve(mockTargetUser);
@@ -111,6 +171,18 @@ describe('ImpersonationService', () => {
 
       const ended = service.endSession(started.sessionId, 'admin-1');
       expect(ended.status).toBe('ENDED');
+
+      expect(mockAuditLogService.createEntry).toHaveBeenCalledWith(
+        'admin-1',
+        expect.objectContaining({
+          action: AuditAction.IMPERSONATION_ENDED,
+          targetType: AuditTargetType.USER,
+          targetId: 'user-1',
+          metadata: expect.objectContaining({
+            sessionId: started.sessionId,
+          }),
+        }),
+      );
 
       const reVerified = service.verifySession(started.sessionId);
       expect(reVerified.isActive).toBe(false);

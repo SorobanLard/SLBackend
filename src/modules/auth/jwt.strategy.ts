@@ -110,7 +110,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       isBanned: user.isBanned,
       isSuspended: user.isSuspended,
       jti: payload.jti,
+      ...(payload.isImpersonating
+        ? {
+            isImpersonating: true,
+            impersonatorId: payload.impersonatorId,
+            sessionId: payload.sessionId,
+          }
+        : {}),
     };
   }
 }
-
