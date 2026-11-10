@@ -60,16 +60,23 @@ function extractStripeHex(raw: string): string | null {
 }
 
 /**
- * Timing-safe hex comparison. Returns false if lengths differ (which would
- * ordinarily short-circuit, leaking information).
+ * Timing-safe hex comparison on decoded byte buffers of equal length.
+ * Ensures both inputs are valid hex strings of identical byte length before
+ * invoking `crypto.timingSafeEqual` so neither throwing nor early character-by-character
+ * string comparison leaks timing information.
  */
-function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  try {
-    return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
-  } catch {
+export function safeCompare(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length === 0 || a.length !== b.length || a.length % 2 !== 0) {
     return false;
   }
+  if (!/^[0-9a-fA-F]+$/.test(a) || !/^[0-9a-fA-F]+$/.test(b)) {
+    return false;
+  }
+  const bufA = Buffer.from(a, 'hex');
+  const bufB = Buffer.from(b, 'hex');
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
 }
 
 @Injectable()
