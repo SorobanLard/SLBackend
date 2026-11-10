@@ -5,9 +5,11 @@ import { ImpersonationController } from './impersonation.controller';
 import { ImpersonationService } from './impersonation.service';
 import { DashboardController } from './dashboard.controller';
 import { DashboardService } from './dashboard.service';
+import { AuditLogModule } from '../audit-log/audit-log.module';
 
 @Module({
   imports: [
+    AuditLogModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

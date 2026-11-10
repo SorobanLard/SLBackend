@@ -1,6 +1,8 @@
-import { Injectable, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, Logger, Optional } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { AuditAction, AuditTargetType } from '@prisma/client';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { AuditLogService } from '../audit-log/audit-log.service';
 import { StartImpersonationDto } from './dto/start-impersonation.dto';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -24,6 +26,7 @@ export class ImpersonationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
+    @Optional() private readonly auditLogService?: AuditLogService,
   ) {}
 
   async startImpersonation(adminId: string, dto: StartImpersonationDto) {
@@ -37,6 +40,10 @@ export class ImpersonationService {
       throw new NotFoundException(`Target user with ID ${dto.targetUserId} not found`);
     }
 
+    if (targetUser.role === 'ADMIN') {
+      throw new ForbiddenException('Admins cannot impersonate another admin user');
+    }
+
     const durationSeconds = dto.durationSeconds ?? 3600;
     const now = new Date();
     const expiresAt = new Date(now.getTime() + durationSeconds * 1000);
@@ -48,6 +55,7 @@ export class ImpersonationService {
         stellarAddress: targetUser.stellarAddress,
         role: targetUser.role,
         isImpersonating: true,
+        isImpersonated: true,
         impersonatorId: adminId,
         sessionId,
       },
@@ -67,6 +75,17 @@ export class ImpersonationService {
     };
 
     this.auditTrail.unshift(logEntry);
+    await this.auditLogService?.createEntry(adminId, {
+      action: AuditAction.IMPERSONATION_STARTED,
+      targetType: AuditTargetType.USER,
+      targetId: targetUser.id,
+      metadata: {
+        sessionId,
+        reason: dto.reason,
+        durationSeconds,
+        expiresAt: expiresAt.toISOString(),
+      },
+    });
     this.logger.log(
       `Admin ${adminId} started impersonating user ${targetUser.id} for ${durationSeconds}s (Session: ${sessionId})`,
     );
@@ -136,8 +155,18 @@ export class ImpersonationService {
       throw new ForbiddenException('Cannot end an impersonation session created by another admin');
     }
 
+    const endedAt = new Date();
     log.status = 'ENDED';
+    void this.auditLogService?.createEntry(adminId, {
+      action: AuditAction.IMPERSONATION_ENDED,
+      targetType: AuditTargetType.USER,
+      targetId: log.targetUserId,
+      metadata: {
+        sessionId,
+        endedAt: endedAt.toISOString(),
+      },
+    });
     this.logger.log(`Impersonation session ${sessionId} ended by admin ${adminId}`);
-    return { sessionId, status: 'ENDED', endedAt: new Date() };
+    return { sessionId, status: 'ENDED', endedAt };
   }
 }
