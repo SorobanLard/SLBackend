@@ -16,6 +16,7 @@ export class GoogleAuthGuard extends AuthGuard('google') {
 
     const response = context.switchToHttp().getResponse<Response>();
     const state = this.googleAuth.createOAuthState();
+    request.oauthState = state;
     response.cookie('google_oauth_state', state, {
       httpOnly: true,
       sameSite: 'lax',
@@ -29,14 +30,16 @@ export class GoogleAuthGuard extends AuthGuard('google') {
     const request = context.switchToHttp().getRequest();
     if (request.path.endsWith('/callback')) {
       const state = request.query?.state;
-      const cookies = this.parseCookies(request.headers.cookie);
+      const cookies = this.parseCookies(request.headers?.cookie);
       if (
         typeof state !== 'string' ||
+        !state ||
         cookies.google_oauth_state !== state ||
         !this.googleAuth.consumeOAuthState(state)
       ) {
         throw new UnauthorizedException('Invalid or expired Google OAuth state');
       }
+      request.oauthStateVerified = true;
       context.switchToHttp().getResponse<Response>().clearCookie('google_oauth_state');
     }
 

@@ -1,4 +1,12 @@
-import { Controller, Get, Post, Body, Req, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Req,
+  UseGuards,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ApiOperation, ApiProperty, ApiTags } from '@nestjs/swagger';
 import { IsNotEmpty, IsString } from 'class-validator';
 import { Request } from 'express';
@@ -25,7 +33,24 @@ export class GoogleAuthController {
   @Get('callback')
   @UseGuards(GoogleAuthGuard)
   @ApiOperation({ summary: 'Handle the Google OAuth callback' })
-  callback(@Req() request: Request & { user: GoogleIdentity }) {
+  callback(
+    @Req()
+    request: Request & {
+      user?: GoogleIdentity;
+      oauthStateVerified?: boolean;
+    },
+  ) {
+    if (!request.user) {
+      throw new UnauthorizedException('Missing authenticated Google identity');
+    }
+    if (
+      request.query &&
+      'state' in request.query &&
+      (!request.query.state || typeof request.query.state !== 'string')
+    ) {
+      throw new UnauthorizedException('Invalid or expired Google OAuth state');
+    }
+
     return this.googleAuth.login(request.user, {
       userAgent: request.headers['user-agent'],
       ipAddress: request.ip,
