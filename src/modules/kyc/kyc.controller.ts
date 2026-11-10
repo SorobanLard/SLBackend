@@ -4,7 +4,6 @@ import {
   HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody, ApiQuery } from '@nestjs/swagger';
 import { KycService } from './kyc.service';
 import { SubmitKycDto } from './dto/submit-kyc.dto';
@@ -12,6 +11,7 @@ import { ReviewKycDto } from './dto/review-kyc.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../../common/guards/roles.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { createMulterOptions } from '../../common/config/multer-options.factory';
 import { KycStatus, UserRole } from '@prisma/client';
 import { QueryKycDto } from './dto/query-kyc.dto';
 
@@ -36,7 +36,7 @@ export class KycController {
         { name: 'document', maxCount: 1 },
         { name: 'additional', maxCount: 1 },
       ],
-      { storage: memoryStorage() },
+      createMulterOptions(),
     ),
   )
   @ApiConsumes('multipart/form-data')
