@@ -185,6 +185,55 @@ describe('OtpService', () => {
         service.verifyOtp('user-123', '+254712345678', '123456'),
       ).rejects.toThrow(UnauthorizedException);
     });
+
+    it('should reject the 6th verification attempt within the window even with the correct code and persist lockout across restarts', async () => {
+      // Simulate persisted database state across attempts (survives service re-instantiation)
+      const persistedRecord = {
+        ...mockOtpRecord,
+        otp: '123456',
+        attemptCount: 0,
+        isUsed: false,
+      };
+
+      mockPrismaService.phoneOtp.findFirst.mockImplementation(async () =>
+        persistedRecord.isUsed ? null : { ...persistedRecord },
+      );
+      mockPrismaService.phoneOtp.update.mockImplementation(async ({ data }: any) => {
+        if (typeof data.attemptCount === 'number') {
+          persistedRecord.attemptCount = data.attemptCount;
+        }
+        if (typeof data.isUsed === 'boolean') {
+          persistedRecord.isUsed = data.isUsed;
+        }
+        return { ...persistedRecord };
+      });
+
+      // 5 failed attempts increment persisted attemptCount from 0 -> 5
+      for (let attempt = 1; attempt <= 5; attempt++) {
+        await expect(
+          service.verifyOtp('user-123', '+254712345678', '000000'),
+        ).rejects.toThrow(UnauthorizedException);
+        expect(persistedRecord.attemptCount).toBe(attempt);
+      }
+
+      // Simulate process restart by constructing a fresh OtpService instance
+      const restartedService = new OtpService(
+        prisma,
+        mockConfigService as unknown as ConfigService,
+      );
+
+      // 6th attempt within the window with the CORRECT code ('123456') must still be rejected
+      await expect(
+        restartedService.verifyOtp('user-123', '+254712345678', '123456'),
+      ).rejects.toThrow(
+        new UnauthorizedException(
+          'Maximum verification attempts exceeded. Please request a new OTP.',
+        ),
+      );
+
+      expect(persistedRecord.isUsed).toBe(true);
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('getVerificationStatus', () => {

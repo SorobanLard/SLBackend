@@ -5,10 +5,13 @@ import { SendOtpDto } from './dto/send-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { AuthSensitiveThrottle } from '../../common/decorators/auth-sensitive-throttle.decorator';
 
 @ApiTags('auth')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
+@AuthSensitiveThrottle()
+@Controller('otp')
 export class OtpController {
   constructor(private readonly otpService: OtpService) {}
 

@@ -51,10 +51,27 @@ export class OtpService {
   }
 
   /**
-   * Check rate limiting for OTP requests
+   * Check rate limiting for OTP requests (persisted in DB + in-memory cache)
    */
-  private checkRateLimit(phoneNumber: string): void {
+  private async checkRateLimit(phoneNumber: string): Promise<void> {
     const now = Date.now();
+    const windowStart = new Date(now - OTP_RATE_LIMIT_WINDOW_MS);
+
+    if (typeof (this.prisma.phoneOtp as any).count === 'function') {
+      const recentCount = await this.prisma.phoneOtp.count({
+        where: {
+          phoneNumber,
+          createdAt: { gte: windowStart },
+        },
+      });
+      if (recentCount >= OTP_RATE_LIMIT_MAX_REQUESTS) {
+        const retrySeconds = Math.ceil(OTP_RATE_LIMIT_WINDOW_MS / 1000);
+        throw new TooManyRequestsException(
+          `Too many OTP requests. Please try again in ${retrySeconds} seconds.`,
+        );
+      }
+    }
+
     const record = this.rateLimitMap.get(phoneNumber);
 
     if (!record || now > record.resetAt) {
@@ -81,7 +98,7 @@ export class OtpService {
    */
   async sendOtp(userId: string, phoneNumber: string, countryCode: string): Promise<void> {
     // Rate limit check
-    this.checkRateLimit(phoneNumber);
+    await this.checkRateLimit(phoneNumber);
 
     // Invalidate any existing unused OTPs for this user and phone
     await this.prisma.phoneOtp.updateMany({
