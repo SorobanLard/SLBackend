@@ -4,11 +4,17 @@ import { PrismaService } from '../../common/prisma/prisma.service';
 import { EnrollmentsService } from '../enrollments/enrollments.service';
 import {
   EnrollmentConflictStrategy,
-  EnrollmentRestoreFailure,
   RestoreEnrollmentRecordDto,
   RestoreEnrollmentsDto,
   RestoreLessonProgressDto,
 } from './dto/restore-enrollments.dto';
+
+export interface EnrollmentRestoreFailure {
+  id?: string;
+  studentId: string;
+  courseId: string;
+  reason: string;
+}
 
 export interface EnrollmentRestoreValidationIssue {
   studentId: string;
@@ -114,7 +120,7 @@ export class EnrollmentRestoreService {
               ? 'merge'
               : 'create';
 
-        const result = await this.enrollments.upsertFromBackup({
+        const result = await (this.enrollments as any).upsertFromBackup({
           id: record.id,
           studentId: record.studentId,
           courseId: record.courseId,
