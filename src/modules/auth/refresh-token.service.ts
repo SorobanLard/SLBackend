@@ -128,6 +128,7 @@ export class RefreshTokenService {
     }
 
     if (
+      payload.jti !== record.id ||
       payload.familyId !== record.familyId ||
       payload.sub !== record.userId ||
       payload.generation !== record.generation
@@ -164,6 +165,13 @@ export class RefreshTokenService {
   async revokeFamily(familyId: string): Promise<void> {
     await this.prisma.refreshToken.updateMany({
       where: { familyId, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+  }
+
+  async revokeAllForUser(userId: string): Promise<void> {
+    await this.prisma.refreshToken.updateMany({
+      where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
   }

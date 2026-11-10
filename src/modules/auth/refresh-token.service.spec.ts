@@ -283,5 +283,54 @@ describe('RefreshTokenService', () => {
         data: { revokedAt: expect.any(Date) },
       });
     });
+
+    it('regression: reuse-after-rotation invalidates the descendant token and forces re-login across the entire family', async () => {
+      const store = new Map<string, any>();
+      const gen1 = activeRecord(1, 'refresh-1');
+      store.set(gen1.tokenHash, { ...gen1 });
+
+      mockPrisma.refreshToken.findUnique.mockImplementation(async ({ where }: any) => {
+        const found = store.get(where.tokenHash);
+        return found ? { ...found } : null;
+      });
+      mockPrisma.refreshToken.create.mockImplementation(async ({ data }: any) => {
+        const record = {
+          ...data,
+          id: `jti-${data.generation}`,
+          consumedAt: null,
+          revokedAt: null,
+        };
+        store.set(record.tokenHash, record);
+        return record;
+      });
+      mockPrisma.refreshToken.updateMany.mockImplementation(async ({ where, data }: any) => {
+        let count = 0;
+        for (const rec of store.values()) {
+          if (where.id && rec.id === where.id && rec.consumedAt === null && rec.revokedAt === null) {
+            Object.assign(rec, data);
+            count++;
+          } else if (where.familyId && rec.familyId === where.familyId && rec.revokedAt === null) {
+            Object.assign(rec, data);
+            count++;
+          }
+        }
+        return { count };
+      });
+
+      // Step 1: Legitimate rotation consumes refresh-1 and issues refresh-2
+      const rotated = await service.rotate('refresh-1');
+      expect(rotated.refreshToken).toBe('refresh-2');
+      expect(store.get(hashRefreshToken('refresh-1'))?.consumedAt).toBeInstanceOf(Date);
+      expect(store.get(hashRefreshToken('refresh-2'))?.revokedAt).toBeNull();
+
+      // Step 2: Attacker replays rotated-out refresh-1 -> triggers family-wide revocation
+      await expect(service.rotate('refresh-1')).rejects.toThrow('Refresh token reuse detected');
+      expect(store.get(hashRefreshToken('refresh-2'))?.revokedAt).toBeInstanceOf(Date);
+
+      // Step 3: Subsequent presentation of refresh-2 is rejected, forcing full re-login
+      await expect(service.rotate('refresh-2')).rejects.toThrow(
+        'Refresh token has been revoked',
+      );
+    });
   });
 });
