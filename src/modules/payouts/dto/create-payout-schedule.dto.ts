@@ -4,6 +4,7 @@ import {
 } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PayoutFrequency } from '@prisma/client';
+import { IsStellarAddress } from '../../../common/validators/is-stellar-address.validator';
 
 export class CreatePayoutScheduleDto {
   @ApiProperty({
@@ -30,5 +31,6 @@ export class CreatePayoutScheduleDto {
   @IsOptional()
   @IsString()
   @IsNotEmpty()
+  @IsStellarAddress()
   stellarAddress?: string;
 }
