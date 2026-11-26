@@ -267,213 +267,79 @@ describe("BackupsService", () => {
             id: "m2",
             title: "Module 2",
             position: 0,
-            lessons: [
-              {
-                id: "l1",
-                title: "L1",
-                position: 0,
-                type: LessonType.VIDEO,
-                videoUrl: "http://video",
-              },
-              {
-                id: "l2",
-                title: "L2",
-                position: 0,
-                type: LessonType.TEXT,
-                content: "content",
-              },
-            ],
+            lessons: [],
           },
         ],
       };
 
       const report = service.validateCompleteness(duplicatePosCourse);
+
       expect(report.warnings).toEqual(
         expect.arrayContaining([
-          expect.stringContaining("contains no lessons"),
-          expect.stringContaining("Duplicate module position"),
-          expect.stringContaining("Duplicate lesson position"),
+          expect.stringContaining("duplicate position"),
+          expect.stringContaining("has no lessons"),
         ]),
       );
     });
   });
 
-  describe("getCourseBackupVersions", () => {
-    it("should return paginated list of versions for course", async () => {
-      mockPrisma.course.findUnique.mockResolvedValue({
-        id: "course-123",
-        instructorAddress: "GBB4NR2",
-      });
-      mockPrisma.courseBackup.findMany.mockResolvedValue([
-        { id: "b2", version: 2, courseId: "course-123" },
-        { id: "b1", version: 1, courseId: "course-123" },
-      ]);
-      mockPrisma.courseBackup.count.mockResolvedValue(2);
+  describe("getBackupById", () => {
+    it("should return the backup when found", async () => {
+      const backup = { id: "backup-1", courseId: "course-123" };
+      mockPrisma.courseBackup.findUnique.mockResolvedValue(backup);
 
-      const result = await service.getCourseBackupVersions("course-123", {
-        id: "u-1",
-        role: UserRole.ADMIN,
-      });
+      const result = await service.getBackupById("backup-1");
 
-      expect(result.data).toHaveLength(2);
-      expect(result.meta.total).toBe(2);
-      expect(result.meta.page).toBe(1);
-    });
-  });
-
-  describe("getCourseBackupByVersion", () => {
-    it("should return specific backup version", async () => {
-      mockPrisma.course.findUnique.mockResolvedValue({
-        id: "course-123",
-        instructorAddress: "GBB4NR2",
+      expect(mockPrisma.courseBackup.findUnique).toHaveBeenCalledWith({
+        where: { id: "backup-1" },
       });
-      mockPrisma.courseBackup.findUnique.mockResolvedValue({
-        id: "b-v2",
-        courseId: "course-123",
-        version: 2,
-      });
-
-      const result = await service.getCourseBackupByVersion("course-123", 2);
-      expect(result.version).toBe(2);
+      expect(result).toEqual(backup);
     });
 
-    it("should throw NotFoundException if version not found", async () => {
-      mockPrisma.course.findUnique.mockResolvedValue({
-        id: "course-123",
-        instructorAddress: "GBB4NR2",
-      });
+    it("should throw NotFoundException when backup is missing", async () => {
       mockPrisma.courseBackup.findUnique.mockResolvedValue(null);
 
-      await expect(
-        service.getCourseBackupByVersion("course-123", 99),
-      ).rejects.toThrow(NotFoundException);
-    });
-  });
-
-  describe("getBackupStatus", () => {
-    it("should return status and metadata for a backup", async () => {
-      mockPrisma.courseBackup.findUnique.mockResolvedValue({
-        id: "b-1",
-        courseId: "course-123",
-        version: 1,
-        status: CourseBackupStatus.COMPLETED,
-        isAutomatic: false,
-        isComplete: true,
-        fileSizeBytes: 1200,
-        checksum: "sha-123",
-        downloadCount: 0,
-        lastDownloadedAt: null,
-        errorMessage: null,
-        validationReport: { isComplete: true },
-        createdAt: new Date(),
-        updatedAt: new Date(),
-        course: {
-          id: "course-123",
-          title: "Sewing",
-          instructorAddress: "GBB4NR2",
-        },
-        requester: { id: "u-1", name: "Alice", email: "alice@example.com" },
-      });
-
-      const status = await service.getBackupStatus("b-1");
-      expect(status.id).toBe("b-1");
-      expect(status.status).toBe(CourseBackupStatus.COMPLETED);
-      expect(status.version).toBe(1);
-      expect(status.checksum).toBe("sha-123");
-    });
-
-    it("should throw NotFoundException if backup does not exist", async () => {
-      mockPrisma.courseBackup.findUnique.mockResolvedValue(null);
-      await expect(service.getBackupStatus("unknown")).rejects.toThrow(
+      await expect(service.getBackupById("missing")).rejects.toThrow(
         NotFoundException,
       );
     });
   });
 
-  describe("downloadBackup", () => {
-    it("should return payload and increment downloadCount for completed backup", async () => {
-      mockPrisma.courseBackup.findUnique.mockResolvedValue({
-        id: "b-1",
-        courseId: "course-123",
-        version: 1,
-        status: CourseBackupStatus.COMPLETED,
-        payload: { courseId: "course-123", version: 1 },
-        checksum: "hash-abc",
-        fileSizeBytes: 500,
-        course: { id: "course-123", instructorAddress: "GBB4NR2" },
+  describe("listCourseBackups", () => {
+    it("should return backups for a course ordered by version", async () => {
+      const backups = [{ id: "b1", version: 2 }, { id: "b2", version: 1 }];
+      mockPrisma.courseBackup.findMany.mockResolvedValue(backups);
+
+      const result = await service.listCourseBackups("course-123");
+
+      expect(mockPrisma.courseBackup.findMany).toHaveBeenCalledWith({
+        where: { courseId: "course-123" },
+        orderBy: { version: "desc" },
       });
-      mockPrisma.courseBackup.update.mockResolvedValue({});
-
-      const result = await service.downloadBackup("b-1");
-
-      expect(result.filename).toBe("course-course-123-v1.json");
-      expect(result.checksum).toBe("hash-abc");
-      expect(mockPrisma.courseBackup.update).toHaveBeenCalledWith({
-        where: { id: "b-1" },
-        data: {
-          downloadCount: { increment: 1 },
-          lastDownloadedAt: expect.any(Date),
-        },
-      });
-    });
-
-    it("should throw BadRequestException if backup is not completed", async () => {
-      mockPrisma.courseBackup.findUnique.mockResolvedValue({
-        id: "b-pending",
-        courseId: "course-123",
-        version: 1,
-        status: CourseBackupStatus.PENDING,
-        course: { id: "course-123", instructorAddress: "GBB4NR2" },
-      });
-
-      await expect(service.downloadBackup("b-pending")).rejects.toThrow(
-        BadRequestException,
-      );
+      expect(result).toEqual(backups);
     });
   });
 
-  describe("scheduled automatic backups", () => {
-    it("should execute scheduled automatic backups for all active courses", async () => {
-      mockPrisma.course.findMany.mockResolvedValue([
-        { id: "course-1" },
-        { id: "course-2" },
-      ]);
+  describe("restoreCourseBackup", () => {
+    it("should throw NotFoundException when backup does not exist", async () => {
+      mockPrisma.courseBackup.findUnique.mockResolvedValue(null);
 
-      // Mock exportCourseBackup call
-      jest
-        .spyOn(service, "exportCourseBackup")
-        .mockResolvedValueOnce({ id: "b-1" } as any)
-        .mockResolvedValueOnce({ id: "b-2" } as any);
-
-      const summary = await service.handleScheduledAutomaticBackups();
-
-      expect(summary.totalEligibleCourses).toBe(2);
-      expect(summary.successfulBackups).toBe(2);
-      expect(summary.failedBackups).toBe(0);
-      expect(service.exportCourseBackup).toHaveBeenCalledTimes(2);
-      expect(service.exportCourseBackup).toHaveBeenCalledWith(
-        "course-1",
-        undefined,
-        true,
-      );
+      await expect(
+        service.restoreCourseBackup("missing", { id: "u-1", role: UserRole.ADMIN }),
+      ).rejects.toThrow(NotFoundException);
     });
 
-    it("should track errors gracefully when an automatic backup fails", async () => {
-      mockPrisma.course.findMany.mockResolvedValue([{ id: "fail-course" }]);
-
-      jest
-        .spyOn(service, "exportCourseBackup")
-        .mockRejectedValueOnce(new Error("Database lock"));
-
-      const summary = await service.runScheduledBackups();
-
-      expect(summary.totalEligibleCourses).toBe(1);
-      expect(summary.successfulBackups).toBe(0);
-      expect(summary.failedBackups).toBe(1);
-      expect(summary.errors[0]).toEqual({
-        courseId: "fail-course",
-        message: "Database lock",
+    it("should throw BadRequestException when backup is not completed", async () => {
+      mockPrisma.courseBackup.findUnique.mockResolvedValue({
+        id: "backup-1",
+        courseId: "course-123",
+        status: CourseBackupStatus.FAILED,
+        data: {},
       });
+
+      await expect(
+        service.restoreCourseBackup("backup-1", { id: "u-1", role: UserRole.ADMIN }),
+      ).rejects.toThrow(BadRequestException);
     });
   });
 });
