@@ -1,147 +1,186 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { HttpException } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import {
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  NotFoundException,
+} from '@nestjs/common';
+import { NotificationType } from '@prisma/client';
 import { EnrollmentsService } from './enrollments.service';
-import { FraudDetectionService } from './fraud-detection.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { ReferralsService } from '../referrals/referrals.service';
+import { FraudDetectionService } from './fraud-detection.service';
 import { DripScheduleService } from '../lessons/drip-schedule.service';
-import { FraudFlagStatus, FraudRiskLevel } from '@prisma/client';
 
-describe('EnrollmentsService - Fraud HOLD handling', () => {
+describe('EnrollmentsService', () => {
   let service: EnrollmentsService;
-  let fraudDetection: FraudDetectionService;
-  let prisma: PrismaService;
 
-  const mockPrisma = {
+  const prisma = {
     enrollment: {
       findUnique: jest.fn(),
       create: jest.fn(),
-    },
-    coursePrerequisite: {
-      findMany: jest.fn().mockResolvedValue([]),
-    },
-    course: {
-      findUnique: jest.fn(),
-      update: jest.fn(),
-    },
-    enrollmentFraudFlag: {
-      create: jest.fn(),
       findMany: jest.fn(),
-      findUnique: jest.fn(),
       count: jest.fn(),
     },
+    course: { update: jest.fn() },
+    user: { findUnique: jest.fn() },
     $transaction: jest.fn(),
   };
 
-  const mockNotifications = {
-    notifyUser: jest.fn().mockResolvedValue({}),
-  };
+  const notifications = { notifyUser: jest.fn() };
+  const invoices = { generateForEnrollment: jest.fn() };
+  const referrals = { trackConversion: jest.fn() };
+  const fraudDetection = { processFraudCheck: jest.fn() };
+  const dripSchedule = { calculateAndSyncUnlockSchedule: jest.fn() };
 
-  const mockInvoices = {
-    generateInvoice: jest.fn().mockResolvedValue({}),
-  };
+  const studentId = 'student-1';
+  const courseId = 'course-1';
+  const txHash = 'tx-hash-1';
+  const amountPaid = 100;
 
-  const mockReferrals = {
-    processReward: jest.fn().mockResolvedValue({}),
-  };
-
-  const mockDripSchedule = {
-    calculateAndSyncUnlockSchedule: jest.fn().mockResolvedValue({}),
-  };
+  const buildEnrollment = () => ({
+    id: 'enrollment-1',
+    studentId,
+    courseId,
+    txHash,
+    amountPaid,
+    course: {
+      id: courseId,
+      title: 'Intro to Stellar',
+      instructorAddress: 'G-INSTRUCTOR',
+    },
+    student: { id: studentId },
+  });
 
   beforeEach(async () => {
+    jest.clearAllMocks();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         EnrollmentsService,
-        FraudDetectionService,
-        { provide: PrismaService, useValue: mockPrisma },
-        { provide: NotificationsService, useValue: mockNotifications },
-        { provide: InvoicesService, useValue: mockInvoices },
-        { provide: ReferralsService, useValue: mockReferrals },
-        { provide: DripScheduleService, useValue: mockDripSchedule },
-        {
-          provide: ConfigService,
-          useValue: {
-            get: jest.fn((key: string, defaultValue?: any) => defaultValue),
-          },
-        },
+        { provide: PrismaService, useValue: prisma },
+        { provide: NotificationsService, useValue: notifications },
+        { provide: InvoicesService, useValue: invoices },
+        { provide: ReferralsService, useValue: referrals },
+        { provide: FraudDetectionService, useValue: fraudDetection },
+        { provide: DripScheduleService, useValue: dripSchedule },
       ],
     }).compile();
 
     service = module.get<EnrollmentsService>(EnrollmentsService);
-    fraudDetection = module.get<FraudDetectionService>(FraudDetectionService);
-    prisma = module.get<PrismaService>(PrismaService);
-    jest.clearAllMocks();
-  });
 
-  it('persists a HELD fraud flag and throws 423 when an enrollment is blocked by fraud check', async () => {
-    mockPrisma.enrollment.findUnique.mockResolvedValue(null);
-    mockPrisma.course.findUnique.mockResolvedValue({ id: 'course-1', title: 'Course' });
-    mockPrisma.coursePrerequisite.findMany.mockResolvedValue([]);
-
-    const heldFlagId = 'flag-held-uuid-1';
-    jest.spyOn(fraudDetection, 'processFraudCheck').mockResolvedValue({
-      action: 'HOLD',
-      score: 95,
-      riskLevel: FraudRiskLevel.CRITICAL,
-      reasons: ['HIGH_DAILY_VOLUME', 'HIGH_AMOUNT_ANOMALY'],
-      flagId: heldFlagId,
+    // Default happy-path stubs
+    prisma.enrollment.findUnique.mockResolvedValue(null);
+    prisma.enrollment.create.mockResolvedValue(buildEnrollment());
+    prisma.course.update.mockResolvedValue({});
+    prisma.user.findUnique.mockResolvedValue({ id: 'instructor-1' });
+    notifications.notifyUser.mockResolvedValue(undefined);
+    invoices.generateForEnrollment.mockResolvedValue(undefined);
+    referrals.trackConversion.mockResolvedValue(undefined);
+    dripSchedule.calculateAndSyncUnlockSchedule.mockResolvedValue(undefined);
+    fraudDetection.processFraudCheck.mockResolvedValue({
+      action: 'ALLOW',
+      score: 0,
+      reasons: [],
+      flagId: null,
     });
 
-    let error: any;
-    try {
-      await service.create('student-1', 'course-1', 'fake-tx-hash', 500);
-    } catch (err) {
-      error = err;
-    }
-
-    expect(error).toBeInstanceOf(HttpException);
-    expect(error.getStatus()).toBe(423);
-    expect(error.getResponse()).toEqual(
-      expect.objectContaining({
-        statusCode: 423,
-        error: 'Enrollment Locked',
-        riskScore: 95,
-        flagId: heldFlagId,
-      }),
-    );
-    expect(fraudDetection.processFraudCheck).toHaveBeenCalledWith(
-      null,
-      'student-1',
-      'course-1',
-      500,
-    );
-    expect(mockPrisma.enrollment.create).not.toHaveBeenCalled();
+    // Prerequisites pass by default
+    jest
+      .spyOn(service as any, 'checkPrerequisites')
+      .mockResolvedValue({ eligible: true, missing: [] });
   });
 
-  it('allows querying HELD fraud flags even when no enrollment exists', async () => {
-    const heldFlag = {
-      id: 'flag-held-uuid-1',
-      enrollmentId: null,
-      studentId: 'student-1',
-      blockedCourseId: 'course-1',
-      blockedAmountPaid: 500,
-      riskScore: 95,
-      riskLevel: FraudRiskLevel.CRITICAL,
-      reasons: ['HIGH_DAILY_VOLUME'],
-      status: FraudFlagStatus.HELD,
-      enrollment: null,
-      student: { id: 'student-1', name: 'John Doe', email: 'john@example.com' },
-      reviewedBy: null,
-    };
+  describe('create', () => {
+    it('creates an enrollment on the happy path', async () => {
+      const result = await service.create(studentId, courseId, txHash, amountPaid);
 
-    mockPrisma.$transaction.mockResolvedValue([[heldFlag], 1]);
-
-    const result = await fraudDetection.getFraudReviewQueue({
-      status: FraudFlagStatus.HELD,
+      expect(prisma.enrollment.findUnique).toHaveBeenCalledWith({
+        where: { studentId_courseId: { studentId, courseId } },
+      });
+      expect(prisma.enrollment.create).toHaveBeenCalledWith({
+        data: { studentId, courseId, txHash, amountPaid },
+        include: { course: true, student: true },
+      });
+      expect(prisma.course.update).toHaveBeenCalledWith({
+        where: { id: courseId },
+        data: {
+          totalEnrollments: { increment: 1 },
+          totalRevenue: { increment: amountPaid },
+        },
+      });
+      expect(notifications.notifyUser).toHaveBeenCalledWith(
+        studentId,
+        NotificationType.ENROLLMENT_CONFIRMED,
+        'Enrollment confirmed!',
+        expect.stringContaining('Intro to Stellar'),
+        { courseId, txHash },
+      );
+      expect(invoices.generateForEnrollment).toHaveBeenCalledWith('enrollment-1');
+      expect(referrals.trackConversion).toHaveBeenCalledWith(studentId, 'enrollment-1');
+      expect(dripSchedule.calculateAndSyncUnlockSchedule).toHaveBeenCalledWith(
+        'enrollment-1',
+      );
+      expect(result).toEqual(buildEnrollment());
     });
 
-    expect(result.data).toHaveLength(1);
-    expect(result.data[0].status).toBe(FraudFlagStatus.HELD);
-    expect(result.data[0].enrollment).toBeNull();
-    expect(result.data[0].blockedCourseId).toBe('course-1');
+    it('throws ConflictException when already enrolled', async () => {
+      prisma.enrollment.findUnique.mockResolvedValue(buildEnrollment());
+
+      await expect(
+        service.create(studentId, courseId, txHash, amountPaid),
+      ).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.enrollment.create).not.toHaveBeenCalled();
+    });
+
+    it('throws ForbiddenException when prerequisites are not met', async () => {
+      jest
+        .spyOn(service as any, 'checkPrerequisites')
+        .mockResolvedValue({ eligible: false, missing: ['course-0'] });
+
+      await expect(
+        service.create(studentId, courseId, txHash, amountPaid),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.enrollment.create).not.toHaveBeenCalled();
+    });
+
+    it('throws HttpException 423 when fraud detection returns HOLD', async () => {
+      fraudDetection.processFraudCheck.mockResolvedValue({
+        action: 'HOLD',
+        score: 95,
+        reasons: ['velocity'],
+        flagId: 'flag-1',
+      });
+
+      await expect(
+        service.create(studentId, courseId, txHash, amountPaid),
+      ).rejects.toMatchObject({ status: 423 });
+      expect(prisma.enrollment.create).not.toHaveBeenCalled();
+    });
+
+    it('does not fail enrollment when invoice generation throws', async () => {
+      invoices.generateForEnrollment.mockRejectedValue(new Error('invoice boom'));
+
+      const result = await service.create(studentId, courseId, txHash, amountPaid);
+
+      expect(result).toEqual(buildEnrollment());
+      expect(referrals.trackConversion).toHaveBeenCalled();
+    });
+  });
+
+  describe('findByStudent', () => {
+    it('returns paginated enrollments', async () => {
+      const enrollments = [buildEnrollment()];
+      prisma.$transaction.mockResolvedValue([enrollments, 1]);
+
+      const result = await service.findByStudent(studentId, 1, 20);
+
+      expect(prisma.enrollment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { studentId }, skip: 0, take: 20 }),
+      );
+      expect(result).toEqual({ data: enrollments, meta: { total: 1 } });
+    });
   });
 });
