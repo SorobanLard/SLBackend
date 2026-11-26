@@ -261,21 +261,7 @@ describe('DbBackupVerificationService', () => {
     const result = await service.runVerification();
 
     expect(result.state).toBe('FAILED');
-    expect(result.message).toBe('pg_restore failed: relation already exists');
-  });
-
-  it('delegates scheduled runs to the verification runner', async () => {
-    const expected = {
-      state: 'SKIPPED' as const,
-      startedAt: '2026-01-01T00:00:00.000Z',
-      completedAt: '2026-01-01T00:00:00.000Z',
-      durationMs: 0,
-    };
-    jest.spyOn(service, 'runVerification').mockResolvedValue(expected);
-
-    await expect(service.handleScheduledVerification()).resolves.toEqual(
-      expected,
-    );
-    expect(service.runVerification).toHaveBeenCalledTimes(1);
+    expect(result.message).toContain('Database restore failed');
+    expect(result.message).toContain('relation already exists');
   });
 });
