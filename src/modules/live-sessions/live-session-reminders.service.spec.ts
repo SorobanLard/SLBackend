@@ -2,75 +2,111 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { LiveSessionRemindersService } from './live-session-reminders.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { NotificationsService } from '../notifications/notifications.service';
-import { LiveSessionStatus, NotificationType } from '@prisma/client';
 
 describe('LiveSessionRemindersService', () => {
   let service: LiveSessionRemindersService;
-  let prisma: any;
-  let notifications: any;
-
-  const mockPrisma = {
+  let prisma: {
     liveSession: {
-      findMany: jest.fn(),
-      update: jest.fn(),
-    },
+      findMany: jest.Mock;
+      update: jest.Mock;
+    };
   };
-
-  const mockNotifications = {
-    notifyUser: jest.fn(),
-  };
+  let notifications: { send: jest.Mock };
 
   beforeEach(async () => {
+    prisma = {
+      liveSession: {
+        findMany: jest.fn(),
+        update: jest.fn(),
+      },
+    };
+    notifications = { send: jest.fn() };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         LiveSessionRemindersService,
-        { provide: PrismaService, useValue: mockPrisma },
-        { provide: NotificationsService, useValue: mockNotifications },
+        { provide: PrismaService, useValue: prisma },
+        { provide: NotificationsService, useValue: notifications },
       ],
     }).compile();
 
-    service = module.get<LiveSessionRemindersService>(
-      LiveSessionRemindersService,
-    );
-    prisma = module.get(PrismaService);
-    notifications = module.get(NotificationsService);
+    service = module.get<LiveSessionRemindersService>(LiveSessionRemindersService);
+  });
+
+  afterEach(() => {
     jest.clearAllMocks();
   });
 
-  it('should send reminders for upcoming non-cancelled sessions and set reminderSent', async () => {
-    const session = {
-      id: 'sess-1',
-      title: 'Intro Live',
-      courseId: 'course-1',
-      scheduledAt: new Date(Date.now() + 1800000), // 30 minutes from now
-      status: LiveSessionStatus.SCHEDULED,
-      reminderSent: false,
-      course: {
-        title: 'Masterclass',
-        enrollments: [
-          { student: { id: 'student-1', email: 'student1@example.com' } },
-        ],
-      },
-    };
+  it('should be defined', () => {
+    expect(service).toBeDefined();
+  });
 
-    mockPrisma.liveSession.findMany.mockResolvedValue([session]);
-    mockNotifications.notifyUser.mockResolvedValue({});
-    mockPrisma.liveSession.update.mockResolvedValue({});
+  describe('sendDueReminders', () => {
+    it('dispatches reminders for upcoming sessions and marks them as sent', async () => {
+      const session = {
+        id: 'session-1',
+        title: 'Intro to Stellar',
+        startsAt: new Date(Date.now() + 15 * 60 * 1000),
+        reminderSentAt: null,
+        status: 'SCHEDULED',
+        attendees: [{ userId: 'user-1' }],
+      };
+      prisma.liveSession.findMany.mockResolvedValue([session]);
+      prisma.liveSession.update.mockResolvedValue({ ...session, reminderSentAt: new Date() });
+      notifications.send.mockResolvedValue(undefined);
 
-    const result = await service.handleUpcomingSessionReminders();
+      await service.sendDueReminders();
 
-    expect(result.sessionsProcessed).toBe(1);
-    expect(result.notificationsSent).toBe(1);
-    expect(mockNotifications.notifyUser).toHaveBeenCalledWith(
-      'student-1',
-      NotificationType.LIVE_SESSION_REMINDER,
-      expect.stringContaining('Upcoming Live Session'),
-      expect.any(String),
-      expect.any(Object),
-    );
-    expect(mockPrisma.liveSession.update).toHaveBeenCalledWith({
-      where: { id: 'sess-1' },
-      data: { reminderSent: true },
+      expect(prisma.liveSession.findMany).toHaveBeenCalled();
+      expect(notifications.send).toHaveBeenCalledTimes(1);
+      expect(prisma.liveSession.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: session.id },
+          data: expect.objectContaining({ reminderSentAt: expect.any(Date) }),
+        }),
+      );
+    });
+
+    it('does nothing when there are no due sessions', async () => {
+      prisma.liveSession.findMany.mockResolvedValue([]);
+
+      await service.sendDueReminders();
+
+      expect(notifications.send).not.toHaveBeenCalled();
+      expect(prisma.liveSession.update).not.toHaveBeenCalled();
+    });
+
+    it('skips sessions that already had a reminder sent', async () => {
+      const session = {
+        id: 'session-2',
+        title: 'Advanced Soroban',
+        startsAt: new Date(Date.now() + 10 * 60 * 1000),
+        reminderSentAt: new Date(),
+        status: 'SCHEDULED',
+        attendees: [{ userId: 'user-2' }],
+      };
+      prisma.liveSession.findMany.mockResolvedValue([session]);
+
+      await service.sendDueReminders();
+
+      expect(notifications.send).not.toHaveBeenCalled();
+      expect(prisma.liveSession.update).not.toHaveBeenCalled();
+    });
+
+    it('propagates errors from the notification service', async () => {
+      const session = {
+        id: 'session-3',
+        title: 'Error Case',
+        startsAt: new Date(Date.now() + 5 * 60 * 1000),
+        reminderSentAt: null,
+        status: 'SCHEDULED',
+        attendees: [{ userId: 'user-3' }],
+      };
+      prisma.liveSession.findMany.mockResolvedValue([session]);
+      notifications.send.mockRejectedValue(new Error('notification failure'));
+
+      await expect(service.sendDueReminders()).rejects.toThrow('notification failure');
+      expect(prisma.liveSession.update).not.toHaveBeenCalled();
     });
   });
 });
