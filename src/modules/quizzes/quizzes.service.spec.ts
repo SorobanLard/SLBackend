@@ -4,7 +4,7 @@ import { QuizzesService } from './quizzes.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import { UserRole } from '@prisma/client';
 
-describe('QuizzesService (Issue #168) — hide correctAnswer from students', () => {
+describe('QuizzesService', () => {
   let service: QuizzesService;
 
   const mockQuestion = {
@@ -28,6 +28,11 @@ describe('QuizzesService (Issue #168) — hide correctAnswer from students', () 
   };
 
   beforeEach(async () => {
+    jest.clearAllMocks();
+    mockPrisma.lesson.findUnique.mockResolvedValue({ id: 'l1' });
+    mockPrisma.quizQuestion.findUnique.mockResolvedValue(mockQuestion);
+    mockPrisma.quizQuestion.findMany.mockResolvedValue([mockQuestion]);
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         QuizzesService,
@@ -38,30 +43,48 @@ describe('QuizzesService (Issue #168) — hide correctAnswer from students', () 
     service = module.get<QuizzesService>(QuizzesService);
   });
 
-  it('should hide correctAnswer and explanation for STUDENT on getQuestionById', async () => {
-    const result = await service.getQuestionById('q1', UserRole.STUDENT);
-    expect(result).not.toHaveProperty('correctAnswer');
-    expect(result).not.toHaveProperty('explanation');
-    expect(result).toHaveProperty('question');
+  describe('getQuestionById', () => {
+    it('should hide correctAnswer and explanation for STUDENT', async () => {
+      const result = await service.getQuestionById('q1', UserRole.STUDENT);
+      expect(result).not.toHaveProperty('correctAnswer');
+      expect(result).not.toHaveProperty('explanation');
+      expect(result).toHaveProperty('question');
+    });
+
+    it('should include correctAnswer and explanation for INSTRUCTOR', async () => {
+      const result = await service.getQuestionById('q1', UserRole.INSTRUCTOR);
+      expect(result).toHaveProperty('correctAnswer');
+      expect(result).toHaveProperty('explanation');
+    });
+
+    it('should throw NotFoundException when question does not exist', async () => {
+      mockPrisma.quizQuestion.findUnique.mockResolvedValueOnce(null);
+      await expect(
+        service.getQuestionById('missing', UserRole.STUDENT),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
   });
 
-  it('should include correctAnswer and explanation for INSTRUCTOR on getQuestionById', async () => {
-    const result = await service.getQuestionById('q1', UserRole.INSTRUCTOR);
-    expect(result).toHaveProperty('correctAnswer');
-    expect(result).toHaveProperty('explanation');
-  });
+  describe('getQuestionsByLesson', () => {
+    it('should hide correctAnswer and explanation for STUDENT', async () => {
+      const results = await service.getQuestionsByLesson('l1', UserRole.STUDENT);
+      expect(results.length).toBeGreaterThan(0);
+      for (const q of results) {
+        expect(q).not.toHaveProperty('correctAnswer');
+        expect(q).not.toHaveProperty('explanation');
+      }
+    });
 
-  it('should hide correctAnswer and explanation for STUDENT on getQuestionsByLesson', async () => {
-    const results = await service.getQuestionsByLesson('l1', UserRole.STUDENT);
-    expect(results.length).toBeGreaterThan(0);
-    for (const q of results) {
-      expect(q).not.toHaveProperty('correctAnswer');
-      expect(q).not.toHaveProperty('explanation');
-    }
-  });
+    it('should include correctAnswer for INSTRUCTOR', async () => {
+      const results = await service.getQuestionsByLesson('l1', UserRole.INSTRUCTOR);
+      expect(results[0]).toHaveProperty('correctAnswer');
+    });
 
-  it('should include correctAnswer for INSTRUCTOR on getQuestionsByLesson', async () => {
-    const results = await service.getQuestionsByLesson('l1', UserRole.INSTRUCTOR);
-    expect(results[0]).toHaveProperty('correctAnswer');
+    it('should throw NotFoundException when lesson does not exist', async () => {
+      mockPrisma.lesson.findUnique.mockResolvedValueOnce(null);
+      await expect(
+        service.getQuestionsByLesson('missing', UserRole.STUDENT),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
   });
 });

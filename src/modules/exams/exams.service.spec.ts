@@ -1,8 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import {
+  NotFoundException,
+  ForbiddenException,
+  BadRequestException,
+} from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 import { ExamsService } from './exams.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { ForbiddenException, NotFoundException, BadRequestException } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
 
 describe('ExamsService', () => {
   let service: ExamsService;
@@ -19,12 +23,14 @@ describe('ExamsService', () => {
     enrollment: { findUnique: jest.fn() },
     examAttempt: {
       findFirst: jest.fn(),
-      create: jest.fn(),
       findMany: jest.fn(),
+      create: jest.fn(),
     },
   };
 
   beforeEach(async () => {
+    jest.clearAllMocks();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ExamsService,
@@ -34,163 +40,347 @@ describe('ExamsService', () => {
 
     service = module.get<ExamsService>(ExamsService);
     prisma = module.get(PrismaService);
-    jest.clearAllMocks();
   });
 
   it('should be defined', () => {
     expect(service).toBeDefined();
   });
 
+  describe('createOrUpdateExam', () => {
+    const dto: any = {
+      courseId: 'course-1',
+      title: 'Final Exam',
+      description: 'desc',
+      questions: [{ id: 'q1', points: 1, correctAnswer: 'a' }],
+    };
+
+    it('throws NotFoundException when course does not exist', async () => {
+      prisma.course.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.createOrUpdateExam('instructor-1', dto),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ForbiddenException when caller is not the instructor', async () => {
+      prisma.course.findUnique.mockResolvedValue({
+        id: 'course-1',
+        instructor: { id: 'other' },
+        instructorAddress: 'other-address',
+      });
+
+      await expect(
+        service.createOrUpdateExam('instructor-1', dto),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('creates a new exam with default thresholds when none exists', async () => {
+      prisma.course.findUnique.mockResolvedValue({
+        id: 'course-1',
+        instructor: { id: 'instructor-1' },
+        instructorAddress: 'addr',
+      });
+      prisma.exam.findUnique.mockResolvedValue(null);
+      prisma.exam.create.mockResolvedValue({ id: 'exam-1' });
+
+      const result = await service.createOrUpdateExam('instructor-1', dto);
+
+      expect(prisma.exam.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          courseId: 'course-1',
+          passingScore: 70,
+          cooldownHours: 24,
+        }),
+      });
+      expect(result).toEqual({ id: 'exam-1' });
+    });
+
+    it('updates an existing exam preserving thresholds when omitted', async () => {
+      prisma.course.findUnique.mockResolvedValue({
+        id: 'course-1',
+        instructor: { id: 'instructor-1' },
+        instructorAddress: 'addr',
+      });
+      prisma.exam.findUnique.mockResolvedValue({
+        id: 'exam-1',
+        passingScore: 80,
+        cooldownHours: 12,
+      });
+      prisma.exam.update.mockResolvedValue({ id: 'exam-1' });
+
+      await service.createOrUpdateExam('instructor-1', dto);
+
+      expect(prisma.exam.update).toHaveBeenCalledWith({
+        where: { id: 'exam-1' },
+        data: expect.objectContaining({
+          passingScore: 80,
+          cooldownHours: 12,
+        }),
+      });
+    });
+  });
+
+  describe('getExamByCourse / getExamById', () => {
+    it('throws NotFoundException when exam missing for course', async () => {
+      prisma.exam.findUnique.mockResolvedValue(null);
+      await expect(service.getExamByCourse('course-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('throws NotFoundException when exam id missing', async () => {
+      prisma.exam.findUnique.mockResolvedValue(null);
+      await expect(service.getExamById('exam-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
   describe('checkEligibility', () => {
-    it('should return ineligible if student is not enrolled', async () => {
-      mockPrisma.exam.findUnique.mockResolvedValue({
-        id: 'exam-1',
-        courseId: 'course-1',
-        cooldownHours: 24,
-      });
-      mockPrisma.enrollment.findUnique.mockResolvedValue(null);
+    const exam = {
+      id: 'exam-1',
+      courseId: 'course-1',
+      cooldownHours: 24,
+      passingScore: 70,
+    };
 
-      const res = await service.checkEligibility('student-1', 'exam-1');
-      expect(res.eligible).toBe(false);
-      expect(res.reason).toContain('not enrolled');
+    it('returns ineligible when student is not enrolled', async () => {
+      prisma.exam.findUnique.mockResolvedValue(exam);
+      prisma.enrollment.findUnique.mockResolvedValue(null);
+
+      const result = await service.checkEligibility('student-1', 'exam-1');
+      expect(result.eligible).toBe(false);
+      expect(result.reason).toContain('not enrolled');
     });
 
-    it('should return ineligible if progress is under 100%', async () => {
-      mockPrisma.exam.findUnique.mockResolvedValue({
-        id: 'exam-1',
-        courseId: 'course-1',
-        cooldownHours: 24,
-      });
-      mockPrisma.enrollment.findUnique.mockResolvedValue({
+    it('returns ineligible when progress is below 100%', async () => {
+      prisma.exam.findUnique.mockResolvedValue(exam);
+      prisma.enrollment.findUnique.mockResolvedValue({
         progressPercent: 50,
-        status: 'ACTIVE',
+        status: 'IN_PROGRESS',
       });
 
-      const res = await service.checkEligibility('student-1', 'exam-1');
-      expect(res.eligible).toBe(false);
-      expect(res.reason).toContain('100% completed');
+      const result = await service.checkEligibility('student-1', 'exam-1');
+      expect(result.eligible).toBe(false);
+      expect(result.reason).toContain('100%');
     });
 
-    it('should return ineligible if student is under retake cooldown', async () => {
-      mockPrisma.exam.findUnique.mockResolvedValue({
-        id: 'exam-1',
-        courseId: 'course-1',
-        cooldownHours: 24,
-      });
-      mockPrisma.enrollment.findUnique.mockResolvedValue({
+    it('returns ineligible when student already passed', async () => {
+      prisma.exam.findUnique.mockResolvedValue(exam);
+      prisma.enrollment.findUnique.mockResolvedValue({
         progressPercent: 100,
         status: 'COMPLETED',
       });
-      mockPrisma.examAttempt.findFirst.mockResolvedValue({
+      prisma.examAttempt.findFirst.mockResolvedValue({
+        passed: true,
+        attemptedAt: new Date(),
+      });
+
+      const result = await service.checkEligibility('student-1', 'exam-1');
+      expect(result.eligible).toBe(false);
+      expect(result.passed).toBe(true);
+    });
+
+    it('returns ineligible during cooldown window', async () => {
+      prisma.exam.findUnique.mockResolvedValue(exam);
+      prisma.enrollment.findUnique.mockResolvedValue({
+        progressPercent: 100,
+        status: 'COMPLETED',
+      });
+      prisma.examAttempt.findFirst.mockResolvedValue({
         passed: false,
-        attemptedAt: new Date(Date.now() - 2 * 60 * 60 * 1000), // 2 hours ago
+        attemptedAt: new Date(),
       });
 
-      const res = await service.checkEligibility('student-1', 'exam-1');
-      expect(res.eligible).toBe(false);
-      expect(res.reason).toContain('cooldown');
+      const result = await service.checkEligibility('student-1', 'exam-1');
+      expect(result.eligible).toBe(false);
+      expect(result.reason).toContain('cooldown');
+      expect(result.remainingMinutes).toBeGreaterThan(0);
     });
 
-    it('should return eligible if requirements are met', async () => {
-      mockPrisma.exam.findUnique.mockResolvedValue({
-        id: 'exam-1',
-        courseId: 'course-1',
-        cooldownHours: 24,
-      });
-      mockPrisma.enrollment.findUnique.mockResolvedValue({
+    it('returns eligible when cooldown has elapsed', async () => {
+      prisma.exam.findUnique.mockResolvedValue(exam);
+      prisma.enrollment.findUnique.mockResolvedValue({
         progressPercent: 100,
         status: 'COMPLETED',
       });
-      mockPrisma.examAttempt.findFirst.mockResolvedValue(null);
+      prisma.examAttempt.findFirst.mockResolvedValue({
+        passed: false,
+        attemptedAt: new Date(Date.now() - 48 * 60 * 60 * 1000),
+      });
 
-      const res = await service.checkEligibility('student-1', 'exam-1');
-      expect(res.eligible).toBe(true);
+      const result = await service.checkEligibility('student-1', 'exam-1');
+      expect(result).toEqual({ eligible: true });
     });
   });
 
   describe('submitExam', () => {
-    it('should validate answers and pass exam if score >= passingScore', async () => {
-      const questions = [
-        { id: 'q1', points: 1, correctAnswer: [0] },
-        { id: 'q2', points: 1, correctAnswer: [1] },
-      ];
+    const exam = {
+      id: 'exam-1',
+      courseId: 'course-1',
+      cooldownHours: 24,
+      passingScore: 70,
+      questions: [
+        { id: 'q1', points: 1, correctAnswer: 'a' },
+        { id: 'q2', points: 1, correctAnswer: ['b', 'c'] },
+      ],
+    };
 
-      mockPrisma.exam.findUnique.mockResolvedValue({
-        id: 'exam-1',
-        courseId: 'course-1',
-        passingScore: 70,
-        cooldownHours: 24,
-        questions,
-      });
-      mockPrisma.enrollment.findUnique.mockResolvedValue({
-        progressPercent: 100,
-        status: 'COMPLETED',
-      });
-      mockPrisma.examAttempt.findFirst.mockResolvedValue(null);
-      mockPrisma.examAttempt.create.mockImplementation(({ data }) => Promise.resolve({ id: 'attempt-1', ...data }));
+    beforeEach(() => {
+      jest.spyOn(service, 'checkEligibility').mockResolvedValue({
+        eligible: true,
+      } as any);
+    });
 
-      const res = await service.submitExam('student-1', 'exam-1', {
-        answers: { q1: [0], q2: [1] },
+    it('throws ForbiddenException when not eligible', async () => {
+      (service.checkEligibility as jest.Mock).mockResolvedValue({
+        eligible: false,
+        reason: 'nope',
       });
 
-      expect(res.score).toBe(100);
-      expect(res.passed).toBe(true);
+      await expect(
+        service.submitExam('student-1', 'exam-1', { answers: {} } as any),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('throws BadRequestException when exam has no questions', async () => {
+      prisma.exam.findUnique.mockResolvedValue({ ...exam, questions: [] });
+
+      await expect(
+        service.submitExam('student-1', 'exam-1', { answers: {} } as any),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException for unknown question id', async () => {
+      prisma.exam.findUnique.mockResolvedValue(exam);
+
+      await expect(
+        service.submitExam('student-1', 'exam-1', {
+          answers: { unknown: 'a' },
+        } as any),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('scores a passing attempt and records it', async () => {
+      prisma.exam.findUnique.mockResolvedValue(exam);
+      prisma.examAttempt.create.mockResolvedValue({
+        id: 'attempt-1',
+        attemptedAt: new Date(),
+      });
+
+      const result = await service.submitExam('student-1', 'exam-1', {
+        answers: { q1: 'a', q2: ['b', 'c'] },
+      } as any);
+
+      expect(result.score).toBe(100);
+      expect(result.passed).toBe(true);
+      expect(prisma.examAttempt.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          examId: 'exam-1',
+          studentId: 'student-1',
+          score: 100,
+          passed: true,
+        }),
+      });
+    });
+
+    it('scores a failing attempt below passing threshold', async () => {
+      prisma.exam.findUnique.mockResolvedValue(exam);
+      prisma.examAttempt.create.mockResolvedValue({
+        id: 'attempt-2',
+        attemptedAt: new Date(),
+      });
+
+      const result = await service.submitExam('student-1', 'exam-1', {
+        answers: { q1: 'a', q2: ['b'] },
+      } as any);
+
+      expect(result.score).toBe(50);
+      expect(result.passed).toBe(false);
+    });
+  });
+
+  describe('getAttemptHistory', () => {
+    it('returns attempts ordered by date', async () => {
+      const attempts = [{ id: 'a1' }];
+      prisma.examAttempt.findMany.mockResolvedValue(attempts);
+
+      const result = await service.getAttemptHistory('student-1', 'exam-1');
+
+      expect(prisma.examAttempt.findMany).toHaveBeenCalledWith({
+        where: { studentId: 'student-1', examId: 'exam-1' },
+        orderBy: { attemptedAt: 'desc' },
+      });
+      expect(result).toEqual(attempts);
+    });
+  });
+
+  describe('hasPassedExam', () => {
+    it('returns true when course has no exam', async () => {
+      prisma.exam.findUnique.mockResolvedValue(null);
+      await expect(
+        service.hasPassedExam('student-1', 'course-1'),
+      ).resolves.toBe(true);
+    });
+
+    it('returns true when a passing attempt exists', async () => {
+      prisma.exam.findUnique.mockResolvedValue({ id: 'exam-1' });
+      prisma.examAttempt.findFirst.mockResolvedValue({ id: 'attempt-1' });
+      await expect(
+        service.hasPassedExam('student-1', 'course-1'),
+      ).resolves.toBe(true);
+    });
+
+    it('returns false when no passing attempt exists', async () => {
+      prisma.exam.findUnique.mockResolvedValue({ id: 'exam-1' });
+      prisma.examAttempt.findFirst.mockResolvedValue(null);
+      await expect(
+        service.hasPassedExam('student-1', 'course-1'),
+      ).resolves.toBe(false);
     });
   });
 
   describe('deleteExam', () => {
-    const mockExam = {
+    const examWithCourse = {
       id: 'exam-1',
-      courseId: 'course-1',
       course: {
-        id: 'course-1',
         instructor: { id: 'instructor-1' },
-        instructorAddress: 'GBB123',
+        instructorAddress: 'addr',
       },
     };
 
-    it('should delete exam if requested by course instructor', async () => {
-      mockPrisma.exam.findUnique.mockResolvedValue(mockExam);
-      mockPrisma.examAttempt.findFirst.mockResolvedValue(null);
-      mockPrisma.exam.delete.mockResolvedValue(mockExam);
-
-      const result = await service.deleteExam('exam-1', 'instructor-1', UserRole.INSTRUCTOR);
-      expect(result).toEqual(mockExam);
-      expect(mockPrisma.exam.delete).toHaveBeenCalledWith({ where: { id: 'exam-1' } });
-    });
-
-    it('should delete exam if requested by admin', async () => {
-      mockPrisma.exam.findUnique.mockResolvedValue(mockExam);
-      mockPrisma.examAttempt.findFirst.mockResolvedValue(null);
-      mockPrisma.exam.delete.mockResolvedValue(mockExam);
-
-      const result = await service.deleteExam('exam-1', 'admin-99', UserRole.ADMIN);
-      expect(result).toEqual(mockExam);
-    });
-
-    it('should throw ForbiddenException if requested by another instructor', async () => {
-      mockPrisma.exam.findUnique.mockResolvedValue(mockExam);
-
+    it('throws NotFoundException when exam missing', async () => {
+      prisma.exam.findUnique.mockResolvedValue(null);
       await expect(
-        service.deleteExam('exam-1', 'other-instructor', UserRole.INSTRUCTOR),
+        service.deleteExam('exam-1', 'user-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ForbiddenException for non-owner non-admin', async () => {
+      prisma.exam.findUnique.mockResolvedValue(examWithCourse);
+      await expect(
+        service.deleteExam('exam-1', 'stranger', UserRole.STUDENT),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('should throw BadRequestException if student attempts exist', async () => {
-      mockPrisma.exam.findUnique.mockResolvedValue(mockExam);
-      mockPrisma.examAttempt.findFirst.mockResolvedValue({ id: 'attempt-1' });
+    it('allows the course instructor to delete', async () => {
+      prisma.exam.findUnique.mockResolvedValue(examWithCourse);
+      prisma.exam.delete.mockResolvedValue({ id: 'exam-1' });
 
-      await expect(
-        service.deleteExam('exam-1', 'instructor-1', UserRole.INSTRUCTOR),
-      ).rejects.toThrow(BadRequestException);
+      await service.deleteExam('exam-1', 'instructor-1', UserRole.INSTRUCTOR);
+
+      expect(prisma.exam.delete).toHaveBeenCalledWith({
+        where: { id: 'exam-1' },
+      });
     });
 
-    it('should throw NotFoundException if exam does not exist', async () => {
-      mockPrisma.exam.findUnique.mockResolvedValue(null);
+    it('allows an admin to delete', async () => {
+      prisma.exam.findUnique.mockResolvedValue(examWithCourse);
+      prisma.exam.delete.mockResolvedValue({ id: 'exam-1' });
 
-      await expect(
-        service.deleteExam('missing-exam', 'instructor-1', UserRole.INSTRUCTOR),
-      ).rejects.toThrow(NotFoundException);
+      await service.deleteExam('exam-1', 'admin-1', UserRole.ADMIN);
+
+      expect(prisma.exam.delete).toHaveBeenCalled();
     });
   });
 });

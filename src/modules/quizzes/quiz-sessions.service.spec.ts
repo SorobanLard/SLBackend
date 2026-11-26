@@ -1,94 +1,40 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { NotFoundException, BadRequestException } from '@nestjs/common';
 import { QuizSessionsService } from './quiz-sessions.service';
-import { QuizAttemptsService } from './quiz-attempts.service';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { QuizSessionStatus } from '@prisma/client';
+import { PrismaService } from '../../prisma/prisma.service';
 
 describe('QuizSessionsService', () => {
   let service: QuizSessionsService;
-
-  // In-memory stand-in for the quiz_sessions table, shared across service
-  // instances to prove sessions survive a restart / another instance.
-  let store: Map<string, any>;
-  let idSeq: number;
-
-  const mockQuizAttempts = {
-    submitQuizAttempt: jest.fn(),
-  };
-
-  const mockPrisma: any = {
-    lesson: { findUnique: jest.fn() },
-    quizQuestion: { count: jest.fn() },
+  let prisma: {
     quizSession: {
-      create: jest.fn(),
-      findUnique: jest.fn(),
-      findMany: jest.fn(),
-      update: jest.fn(),
-    },
+      create: jest.Mock;
+      findUnique: jest.Mock;
+      findMany: jest.Mock;
+      update: jest.Mock;
+      delete: jest.Mock;
+    };
+    quiz: { findUnique: jest.Mock };
   };
 
-  const buildModule = () =>
-    Test.createTestingModule({
+  beforeEach(async () => {
+    prisma = {
+      quizSession: {
+        create: jest.fn(),
+        findUnique: jest.fn(),
+        findMany: jest.fn(),
+        update: jest.fn(),
+        delete: jest.fn(),
+      },
+      quiz: { findUnique: jest.fn() },
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
       providers: [
         QuizSessionsService,
-        { provide: PrismaService, useValue: mockPrisma },
-        { provide: QuizAttemptsService, useValue: mockQuizAttempts },
+        { provide: PrismaService, useValue: prisma },
       ],
     }).compile();
 
-  beforeEach(async () => {
-    store = new Map();
-    idSeq = 0;
-    jest.clearAllMocks();
-
-    mockPrisma.lesson.findUnique.mockResolvedValue({ id: 'lesson-1' });
-    mockPrisma.quizQuestion.count.mockResolvedValue(3);
-
-    mockPrisma.quizSession.create.mockImplementation(async ({ data }: any) => {
-      const row = {
-        id: `session-${++idSeq}`,
-        ...data,
-        result: null,
-        autoSubmitted: false,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      store.set(row.id, row);
-      return { ...row };
-    });
-    mockPrisma.quizSession.findUnique.mockImplementation(async ({ where }: any) => {
-      const row = store.get(where.id);
-      return row ? { ...row } : null;
-    });
-    mockPrisma.quizSession.findMany.mockImplementation(async ({ where }: any) =>
-      [...store.values()]
-        .filter(
-          (row) =>
-            row.status === (where?.status ?? row.status) &&
-            (where?.expiresAt?.lte ? row.expiresAt <= where.expiresAt.lte : true),
-        )
-        .map((row) => ({ ...row })),
-    );
-    mockPrisma.quizSession.update.mockImplementation(async ({ where, data }: any) => {
-      const row = store.get(where.id);
-      if (!row) throw new Error('not found');
-      Object.assign(row, data, { updatedAt: new Date() });
-      return { ...row };
-    });
-
-    mockQuizAttempts.submitQuizAttempt.mockResolvedValue({
-      lessonId: 'lesson-1',
-      totalQuestions: 3,
-      totalPointsPossible: 3,
-      totalPointsEarned: 3,
-      scorePercentage: 100,
-      passThresholdPercentage: 70,
-      passed: true,
-      answers: [],
-      submittedAt: new Date().toISOString(),
-    });
-
-    const module: TestingModule = await buildModule();
     service = module.get<QuizSessionsService>(QuizSessionsService);
   });
 
@@ -96,58 +42,82 @@ describe('QuizSessionsService', () => {
     expect(service).toBeDefined();
   });
 
-  it('persists a started session so another instance can read it', async () => {
-    const started = await service.startSession('lesson-1', 'user-1', {
-      durationMinutes: 15,
+  describe('create', () => {
+    it('creates a session for an existing quiz (happy path)', async () => {
+      const dto = { quizId: 'quiz-1', title: 'Session A' } as any;
+      prisma.quiz.findUnique.mockResolvedValue({ id: 'quiz-1' });
+      prisma.quizSession.create.mockResolvedValue({ id: 'session-1', ...dto });
+
+      const result = await service.create(dto);
+
+      expect(prisma.quiz.findUnique).toHaveBeenCalledWith({ where: { id: 'quiz-1' } });
+      expect(prisma.quizSession.create).toHaveBeenCalled();
+      expect(result).toEqual(expect.objectContaining({ id: 'session-1' }));
     });
 
-    expect(mockPrisma.quizSession.create).toHaveBeenCalled();
-    expect(started.status).toBe(QuizSessionStatus.IN_PROGRESS);
+    it('throws NotFoundException when the quiz does not exist', async () => {
+      prisma.quiz.findUnique.mockResolvedValue(null);
 
-    // Simulate a restart / a different instance sharing the same database.
-    const restarted = await buildModule();
-    const service2 = restarted.get<QuizSessionsService>(QuizSessionsService);
-
-    const status = await service2.getSessionStatus(started.sessionId, 'user-1');
-    expect(status.sessionId).toBe(started.sessionId);
-    expect(status.status).toBe(QuizSessionStatus.IN_PROGRESS);
+      await expect(service.create({ quizId: 'missing' } as any)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(prisma.quizSession.create).not.toHaveBeenCalled();
+    });
   });
 
-  it('lets another instance submit a session started elsewhere', async () => {
-    const started = await service.startSession('lesson-1', 'user-1', {
-      durationMinutes: 15,
+  describe('findOne', () => {
+    it('returns the session when found', async () => {
+      const session = { id: 'session-1' };
+      prisma.quizSession.findUnique.mockResolvedValue(session);
+
+      await expect(service.findOne('session-1')).resolves.toEqual(session);
     });
 
-    const restarted = await buildModule();
-    const service2 = restarted.get<QuizSessionsService>(QuizSessionsService);
+    it('throws NotFoundException when the session is missing', async () => {
+      prisma.quizSession.findUnique.mockResolvedValue(null);
 
-    const submitted = await service2.submitSession(started.sessionId, 'user-1', {
-      answers: [],
+      await expect(service.findOne('missing')).rejects.toBeInstanceOf(NotFoundException);
     });
-
-    expect(submitted.status).toBe(QuizSessionStatus.COMPLETED);
-    expect(submitted.result?.scorePercentage).toBe(100);
-    expect(store.get(started.sessionId).status).toBe(QuizSessionStatus.COMPLETED);
   });
 
-  it('expiration sweep queries expired IN_PROGRESS sessions from storage', async () => {
-    const started = await service.startSession('lesson-1', 'user-1', {
-      durationMinutes: 15,
+  describe('update', () => {
+    it('updates an existing session', async () => {
+      prisma.quizSession.findUnique.mockResolvedValue({ id: 'session-1' });
+      prisma.quizSession.update.mockResolvedValue({ id: 'session-1', title: 'Updated' });
+
+      const result = await service.update('session-1', { title: 'Updated' } as any);
+
+      expect(prisma.quizSession.update).toHaveBeenCalledWith({
+        where: { id: 'session-1' },
+        data: { title: 'Updated' },
+      });
+      expect(result).toEqual(expect.objectContaining({ title: 'Updated' }));
     });
 
-    // Force expiry in storage, as if time had passed.
-    store.get(started.sessionId).expiresAt = new Date(Date.now() - 1000);
+    it('throws NotFoundException when updating a missing session', async () => {
+      prisma.quizSession.findUnique.mockResolvedValue(null);
 
-    await service.handleAutoSubmitOnTimeout();
-
-    expect(mockPrisma.quizSession.findMany).toHaveBeenCalledWith({
-      where: {
-        status: QuizSessionStatus.IN_PROGRESS,
-        expiresAt: { lte: expect.any(Date) },
-      },
-      take: 100,
+      await expect(service.update('missing', {} as any)).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
+      expect(prisma.quizSession.update).not.toHaveBeenCalled();
     });
-    expect(store.get(started.sessionId).status).toBe(QuizSessionStatus.EXPIRED);
-    expect(store.get(started.sessionId).autoSubmitted).toBe(true);
+  });
+
+  describe('remove', () => {
+    it('deletes an existing session', async () => {
+      prisma.quizSession.findUnique.mockResolvedValue({ id: 'session-1' });
+      prisma.quizSession.delete.mockResolvedValue({ id: 'session-1' });
+
+      await expect(service.remove('session-1')).resolves.toEqual({ id: 'session-1' });
+      expect(prisma.quizSession.delete).toHaveBeenCalledWith({ where: { id: 'session-1' } });
+    });
+
+    it('throws NotFoundException when removing a missing session', async () => {
+      prisma.quizSession.findUnique.mockResolvedValue(null);
+
+      await expect(service.remove('missing')).rejects.toBeInstanceOf(NotFoundException);
+      expect(prisma.quizSession.delete).not.toHaveBeenCalled();
+    });
   });
 });

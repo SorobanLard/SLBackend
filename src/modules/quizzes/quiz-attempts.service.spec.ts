@@ -1,146 +1,130 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { BadRequestException } from '@nestjs/common';
+import { NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { QuizAttemptsService } from './quiz-attempts.service';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { QuestionType } from '@prisma/client';
+import { PrismaService } from '../../prisma/prisma.service';
 
 describe('QuizAttemptsService', () => {
   let service: QuizAttemptsService;
-
-  const mockPrisma: any = {
-    lesson: { findUnique: jest.fn() },
-    quizQuestion: { findMany: jest.fn() },
-    quizAttempt: { create: jest.fn(), findMany: jest.fn() },
+  let prisma: {
+    quiz: { findUnique: jest.Mock };
+    quizAttempt: {
+      create: jest.Mock;
+      findUnique: jest.Mock;
+      findMany: jest.Mock;
+      update: jest.Mock;
+      count: jest.Mock;
+    };
   };
 
-  const questions = [
-    {
-      id: 'q-1',
-      lessonId: 'lesson-1',
-      question: 'What is 2 + 2?',
-      type: QuestionType.SINGLE_CHOICE,
-      correctAnswer: [1],
-      explanation: '2 + 2 = 4',
-      points: 2,
-    },
-    {
-      id: 'q-2',
-      lessonId: 'lesson-1',
-      question: 'The sky is blue.',
-      type: QuestionType.TRUE_FALSE,
-      correctAnswer: ['true'],
-      explanation: null,
-      points: 1,
-    },
-  ];
-
   beforeEach(async () => {
+    prisma = {
+      quiz: { findUnique: jest.fn() },
+      quizAttempt: {
+        create: jest.fn(),
+        findUnique: jest.fn(),
+        findMany: jest.fn(),
+        update: jest.fn(),
+        count: jest.fn(),
+      },
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         QuizAttemptsService,
-        { provide: PrismaService, useValue: mockPrisma },
+        { provide: PrismaService, useValue: prisma },
       ],
     }).compile();
 
     service = module.get<QuizAttemptsService>(QuizAttemptsService);
-    jest.clearAllMocks();
-
-    mockPrisma.lesson.findUnique.mockResolvedValue({ id: 'lesson-1' });
-    mockPrisma.quizQuestion.findMany.mockResolvedValue(questions);
   });
 
   it('should be defined', () => {
     expect(service).toBeDefined();
   });
 
-  describe('submitQuizAttempt', () => {
-    it('persists the computed result as a QuizAttempt row', async () => {
-      const attemptedAt = new Date();
-      mockPrisma.quizAttempt.create.mockResolvedValue({
-        id: 'attempt-1',
-        attemptedAt,
-      });
+  describe('startAttempt', () => {
+    it('creates an attempt for an existing quiz (happy path)', async () => {
+      const quiz = { id: 'quiz-1', isPublished: true, maxAttempts: 3 };
+      const attempt = { id: 'attempt-1', quizId: 'quiz-1', userId: 'user-1' };
+      prisma.quiz.findUnique.mockResolvedValue(quiz);
+      prisma.quizAttempt.count.mockResolvedValue(0);
+      prisma.quizAttempt.create.mockResolvedValue(attempt);
 
-      const result = await service.submitQuizAttempt(
-        'lesson-1',
-        {
-          answers: [
-            { questionId: 'q-1', answer: [1] },
-            { questionId: 'q-2', answer: ['true'] },
-          ],
-        },
-        'student-1',
-      );
+      const result = await service.startAttempt('quiz-1', 'user-1');
 
-      expect(mockPrisma.quizAttempt.create).toHaveBeenCalledWith({
-        data: {
-          lessonId: 'lesson-1',
-          studentId: 'student-1',
-          score: 100,
-          passed: true,
-          answers: expect.any(Array),
-        },
-      });
-      expect(result.attemptId).toBe('attempt-1');
-      expect(result.scorePercentage).toBe(100);
-      expect(result.passed).toBe(true);
-      expect(result.submittedAt).toBe(attemptedAt.toISOString());
+      expect(prisma.quiz.findUnique).toHaveBeenCalledWith({ where: { id: 'quiz-1' } });
+      expect(prisma.quizAttempt.create).toHaveBeenCalled();
+      expect(result).toEqual(attempt);
     });
 
-    it('persists failing attempts too', async () => {
-      mockPrisma.quizAttempt.create.mockResolvedValue({
-        id: 'attempt-2',
-        attemptedAt: new Date(),
-      });
+    it('throws NotFoundException when the quiz does not exist', async () => {
+      prisma.quiz.findUnique.mockResolvedValue(null);
 
-      const result = await service.submitQuizAttempt(
-        'lesson-1',
-        {
-          answers: [
-            { questionId: 'q-1', answer: [0] },
-            { questionId: 'q-2', answer: ['false'] },
-          ],
-        },
-        'student-1',
+      await expect(service.startAttempt('missing', 'user-1')).rejects.toBeInstanceOf(
+        NotFoundException,
       );
-
-      expect(result.passed).toBe(false);
-      expect(mockPrisma.quizAttempt.create).toHaveBeenCalledWith({
-        data: expect.objectContaining({
-          lessonId: 'lesson-1',
-          studentId: 'student-1',
-          passed: false,
-        }),
-      });
+      expect(prisma.quizAttempt.create).not.toHaveBeenCalled();
     });
 
-    it('rejects answers for questions outside the lesson without persisting', async () => {
-      await expect(
-        service.submitQuizAttempt(
-          'lesson-1',
-          { answers: [{ questionId: 'other', answer: [0] }] },
-          'student-1',
-        ),
-      ).rejects.toThrow(BadRequestException);
-      expect(mockPrisma.quizAttempt.create).not.toHaveBeenCalled();
+    it('throws BadRequestException when max attempts are exceeded', async () => {
+      prisma.quiz.findUnique.mockResolvedValue({ id: 'quiz-1', isPublished: true, maxAttempts: 1 });
+      prisma.quizAttempt.count.mockResolvedValue(1);
+
+      await expect(service.startAttempt('quiz-1', 'user-1')).rejects.toBeInstanceOf(
+        BadRequestException,
+      );
+      expect(prisma.quizAttempt.create).not.toHaveBeenCalled();
     });
   });
 
-  describe('getAttemptHistory', () => {
-    it('returns the student’s attempts for a lesson, newest first', async () => {
-      const rows = [
-        { id: 'attempt-2', lessonId: 'lesson-1', studentId: 'student-1', score: 40, passed: false },
-        { id: 'attempt-1', lessonId: 'lesson-1', studentId: 'student-1', score: 100, passed: true },
-      ];
-      mockPrisma.quizAttempt.findMany.mockResolvedValue(rows);
+  describe('submitAttempt', () => {
+    it('throws NotFoundException when the attempt does not exist', async () => {
+      prisma.quizAttempt.findUnique.mockResolvedValue(null);
 
-      const history = await service.getAttemptHistory('student-1', 'lesson-1');
+      await expect(
+        service.submitAttempt('missing', 'user-1', { answers: [] } as any),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
 
-      expect(mockPrisma.quizAttempt.findMany).toHaveBeenCalledWith({
-        where: { studentId: 'student-1', lessonId: 'lesson-1' },
-        orderBy: { attemptedAt: 'desc' },
+    it('throws ForbiddenException when the attempt belongs to another user', async () => {
+      prisma.quizAttempt.findUnique.mockResolvedValue({
+        id: 'attempt-1',
+        userId: 'other-user',
+        status: 'IN_PROGRESS',
       });
-      expect(history).toEqual(rows);
+
+      await expect(
+        service.submitAttempt('attempt-1', 'user-1', { answers: [] } as any),
+      ).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it('throws BadRequestException when the attempt is already submitted', async () => {
+      prisma.quizAttempt.findUnique.mockResolvedValue({
+        id: 'attempt-1',
+        userId: 'user-1',
+        status: 'SUBMITTED',
+      });
+
+      await expect(
+        service.submitAttempt('attempt-1', 'user-1', { answers: [] } as any),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+  });
+
+  describe('getAttempt', () => {
+    it('returns the attempt for the owning user', async () => {
+      const attempt = { id: 'attempt-1', userId: 'user-1' };
+      prisma.quizAttempt.findUnique.mockResolvedValue(attempt);
+
+      await expect(service.getAttempt('attempt-1', 'user-1')).resolves.toEqual(attempt);
+    });
+
+    it('throws NotFoundException when the attempt is missing', async () => {
+      prisma.quizAttempt.findUnique.mockResolvedValue(null);
+
+      await expect(service.getAttempt('missing', 'user-1')).rejects.toBeInstanceOf(
+        NotFoundException,
+      );
     });
   });
 });
