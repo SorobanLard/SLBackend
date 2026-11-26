@@ -17,7 +17,9 @@ describe('CertificateShareController', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       controllers: [CertificateShareController],
-      providers: [{ provide: CertificateShareService, useValue: mockShareService }],
+      providers: [
+        { provide: CertificateShareService, useValue: mockShareService },
+      ],
     }).compile();
 
     controller = module.get<CertificateShareController>(CertificateShareController);
@@ -28,47 +30,97 @@ describe('CertificateShareController', () => {
     expect(controller).toBeDefined();
   });
 
-  it('generate delegates to generateShareLink with certificate and student ids', async () => {
-    mockShareService.generateShareLink.mockResolvedValue({ url: 'https://x/share/tok' });
+  // ─── Route delegation ─────────────────────────────────────────────────────
 
-    const res = await controller.generate('cert-1', 'student-1');
+  describe('generate', () => {
+    it('delegates to generateShareLink with the certificate and student ids', async () => {
+      mockShareService.generateShareLink.mockResolvedValue({ url: 'https://x/share/tok' });
 
-    expect(mockShareService.generateShareLink).toHaveBeenCalledWith('cert-1', 'student-1');
-    expect(res).toEqual({ url: 'https://x/share/tok' });
-  });
+      const result = await controller.generate('cert-1', 'student-1');
 
-  it('metadata delegates to getShareMetadata', async () => {
-    mockShareService.getShareMetadata.mockResolvedValue({ title: 'Cert' });
-
-    const res = await controller.metadata('tok');
-
-    expect(mockShareService.getShareMetadata).toHaveBeenCalledWith('tok');
-    expect(res).toEqual({ title: 'Cert' });
-  });
-
-  it('view renders the share page as a StreamableFile', async () => {
-    mockShareService.renderSharePage.mockResolvedValue({ html: '<html>ok</html>' });
-
-    const res = await controller.view('tok');
-
-    expect(mockShareService.renderSharePage).toHaveBeenCalledWith('tok');
-    expect(res).toBeInstanceOf(StreamableFile);
-    const chunks: Buffer[] = [];
-    for await (const chunk of res.getStream()) chunks.push(chunk as Buffer);
-    expect(Buffer.concat(chunks).toString()).toBe('<html>ok</html>');
-  });
-
-  describe('guard wiring', () => {
-    it('protects share link generation with JwtAuthGuard', () => {
-      expect(Reflect.getMetadata(GUARDS_METADATA, CertificateShareController.prototype.generate)).toEqual([
-        JwtAuthGuard,
-      ]);
+      expect(mockShareService.generateShareLink).toHaveBeenCalledTimes(1);
+      expect(mockShareService.generateShareLink).toHaveBeenCalledWith('cert-1', 'student-1');
+      expect(result).toEqual({ url: 'https://x/share/tok' });
     });
 
-    it('keeps public share routes unguarded', () => {
-      expect(Reflect.getMetadata(GUARDS_METADATA, CertificateShareController)).toBeUndefined();
-      expect(Reflect.getMetadata(GUARDS_METADATA, CertificateShareController.prototype.metadata)).toBeUndefined();
-      expect(Reflect.getMetadata(GUARDS_METADATA, CertificateShareController.prototype.view)).toBeUndefined();
+    it('propagates service errors', async () => {
+      mockShareService.generateShareLink.mockRejectedValue(new Error('not found'));
+      await expect(controller.generate('bad', 'student-1')).rejects.toThrow('not found');
+    });
+  });
+
+  describe('metadata', () => {
+    it('delegates to getShareMetadata with the token', async () => {
+      mockShareService.getShareMetadata.mockResolvedValue({ title: 'My Cert' });
+
+      const result = await controller.metadata('tok-abc');
+
+      expect(mockShareService.getShareMetadata).toHaveBeenCalledTimes(1);
+      expect(mockShareService.getShareMetadata).toHaveBeenCalledWith('tok-abc');
+      expect(result).toEqual({ title: 'My Cert' });
+    });
+  });
+
+  describe('view', () => {
+    it('delegates to renderSharePage and returns a StreamableFile wrapping the HTML', async () => {
+      const html = '<html><body>Certificate</body></html>';
+      mockShareService.renderSharePage.mockResolvedValue({ html });
+
+      const result = await controller.view('tok-abc');
+
+      expect(mockShareService.renderSharePage).toHaveBeenCalledTimes(1);
+      expect(mockShareService.renderSharePage).toHaveBeenCalledWith('tok-abc');
+      expect(result).toBeInstanceOf(StreamableFile);
+    });
+
+    it('StreamableFile carries the correct HTML bytes', async () => {
+      const html = '<html>ok</html>';
+      mockShareService.renderSharePage.mockResolvedValue({ html });
+
+      const result = await controller.view('tok-abc');
+
+      // StreamableFile exposes the underlying Readable; collect its chunks.
+      const readable = result.getStream();
+      const chunks: Buffer[] = [];
+      await new Promise<void>((resolve, reject) => {
+        readable.on('data', (chunk: Buffer) => chunks.push(chunk));
+        readable.on('end', resolve);
+        readable.on('error', reject);
+      });
+      expect(Buffer.concat(chunks).toString('utf8')).toBe(html);
+    });
+  });
+
+  // ─── Guard / decorator wiring ─────────────────────────────────────────────
+
+  describe('guard wiring', () => {
+    it('requires JwtAuthGuard on generate (the only protected route)', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        CertificateShareController.prototype.generate,
+      );
+      expect(guards).toEqual([JwtAuthGuard]);
+    });
+
+    it('leaves the controller class itself unguarded', () => {
+      const guards = Reflect.getMetadata(GUARDS_METADATA, CertificateShareController);
+      expect(guards).toBeUndefined();
+    });
+
+    it('leaves the public metadata route unguarded', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        CertificateShareController.prototype.metadata,
+      );
+      expect(guards).toBeUndefined();
+    });
+
+    it('leaves the public view route unguarded', () => {
+      const guards = Reflect.getMetadata(
+        GUARDS_METADATA,
+        CertificateShareController.prototype.view,
+      );
+      expect(guards).toBeUndefined();
     });
   });
 });
