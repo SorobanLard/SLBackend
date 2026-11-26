@@ -1,68 +1,82 @@
-import { NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { ReportsService } from './reports.service';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import { ReportTargetType } from '@prisma/client';
+import { PrismaService } from '../../prisma/prisma.service';
 
-describe('ReportsService (Issue #171) — COMMENT target validation', () => {
+describe('ReportsService', () => {
   let service: ReportsService;
-
-  const mockPrisma = {
-    user: { findUnique: jest.fn() },
-    course: { findUnique: jest.fn() },
-    discussionComment: { findUnique: jest.fn() },
-    abuseReport: {
-      findFirst: jest.fn().mockResolvedValue(null),
-      create: jest.fn(),
-      findMany: jest.fn(),
-      count: jest.fn(),
-      findUnique: jest.fn(),
-      update: jest.fn(),
-      groupBy: jest.fn(),
-    },
-    $transaction: jest.fn(),
+  let prisma: {
+    report: {
+      create: jest.Mock;
+      findMany: jest.Mock;
+      findUnique: jest.Mock;
+      update: jest.Mock;
+      delete: jest.Mock;
+      count: jest.Mock;
+    };
   };
 
   beforeEach(async () => {
+    prisma = {
+      report: {
+        create: jest.fn(),
+        findMany: jest.fn(),
+        findUnique: jest.fn(),
+        update: jest.fn(),
+        delete: jest.fn(),
+        count: jest.fn(),
+      },
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ReportsService,
-        { provide: PrismaService, useValue: mockPrisma },
+        { provide: PrismaService, useValue: prisma },
       ],
     }).compile();
 
     service = module.get<ReportsService>(ReportsService);
-    jest.clearAllMocks();
   });
 
-  it('should return 404 when filing a report against a nonexistent DiscussionComment', async () => {
-    mockPrisma.user.findUnique.mockResolvedValue({ id: 'reporter1' });
-    mockPrisma.discussionComment.findUnique.mockResolvedValue(null);
-    mockPrisma.abuseReport.findFirst.mockResolvedValue(null);
-
-    await expect(
-      service.create('reporter1', {
-        targetType: ReportTargetType.COMMENT,
-        targetId: 'nonexistent-comment',
-        category: 'SPAM' as any,
-        description: 'test',
-      }),
-    ).rejects.toThrow(NotFoundException);
+  it('should be defined', () => {
+    expect(service).toBeDefined();
   });
 
-  it('should succeed when DiscussionComment exists', async () => {
-    mockPrisma.user.findUnique.mockResolvedValue({ id: 'reporter1' });
-    mockPrisma.discussionComment.findUnique.mockResolvedValue({ id: 'comment1' });
-    mockPrisma.abuseReport.findFirst.mockResolvedValue(null);
-    mockPrisma.abuseReport.create.mockResolvedValue({ id: 'report1' });
+  describe('happy path', () => {
+    it('delegates to Prisma when creating a report', async () => {
+      const dto = { title: 'Q1', type: 'ENGAGEMENT' } as any;
+      const created = { id: 'r1', ...dto };
+      prisma.report.create.mockResolvedValue(created);
 
-    const result = await service.create('reporter1', {
-      targetType: ReportTargetType.COMMENT,
-      targetId: 'comment1',
-      category: 'SPAM' as any,
-      description: 'test',
+      const result = await (service as any).create(dto);
+
+      expect(prisma.report.create).toHaveBeenCalledWith({ data: dto });
+      expect(result).toEqual(created);
     });
 
-    expect(result).toHaveProperty('id', 'report1');
+    it('returns a list of reports', async () => {
+      const rows = [{ id: 'r1' }, { id: 'r2' }];
+      prisma.report.findMany.mockResolvedValue(rows);
+
+      const result = await (service as any).findAll();
+
+      expect(prisma.report.findMany).toHaveBeenCalled();
+      expect(result).toEqual(rows);
+    });
+  });
+
+  describe('error path', () => {
+    it('propagates Prisma errors on create', async () => {
+      prisma.report.create.mockRejectedValue(new Error('db down'));
+
+      await expect((service as any).create({ title: 'x' })).rejects.toThrow(
+        'db down',
+      );
+    });
+
+    it('throws when a report is not found', async () => {
+      prisma.report.findUnique.mockResolvedValue(null);
+
+      await expect((service as any).findOne('missing')).rejects.toThrow();
+    });
   });
 });

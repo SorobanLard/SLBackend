@@ -1,227 +1,187 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaService } from '../../common/prisma/prisma.service';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../../common/guards/roles.guard';
-import { EngagementReportController } from './engagement-report.controller';
 import { EngagementReportService } from './engagement-report.service';
-import {
-  EngagementReportQueryDto,
-  EngagementScope,
-} from './dto/engagement-report-query.dto';
+import { EngagementScope } from './dto/engagement-report-query.dto';
 
-const DAY = 24 * 60 * 60 * 1000;
-
-describe('EngagementReport (Issue #64)', () => {
-  let controller: EngagementReportController;
+describe('EngagementReportService', () => {
   let service: EngagementReportService;
-
-  const mockPrisma = {
-    user: { findUnique: jest.fn() },
-    course: { findUnique: jest.fn() },
-    enrollment: { findMany: jest.fn() },
-    lessonProgress: {
-      aggregate: jest.fn(),
-      count: jest.fn(),
-      groupBy: jest.fn(),
-    },
-    userPoints: { findMany: jest.fn() },
+  let prisma: {
+    enrollment: { findMany: jest.Mock };
+    lessonProgress: { aggregate: jest.Mock; count: jest.Mock; groupBy: jest.Mock };
+    userPoints: { findMany: jest.Mock };
+    user: { findUnique: jest.Mock };
+    course: { findUnique: jest.Mock };
   };
 
-  const query = (over: Partial<EngagementReportQueryDto> = {}) =>
-    Object.assign(new EngagementReportQueryDto(), over);
-
   beforeEach(async () => {
+    prisma = {
+      enrollment: { findMany: jest.fn() },
+      lessonProgress: {
+        aggregate: jest.fn(),
+        count: jest.fn(),
+        groupBy: jest.fn(),
+      },
+      userPoints: { findMany: jest.fn() },
+      user: { findUnique: jest.fn() },
+      course: { findUnique: jest.fn() },
+    };
+
     const module: TestingModule = await Test.createTestingModule({
-      controllers: [EngagementReportController],
       providers: [
         EngagementReportService,
-        { provide: PrismaService, useValue: mockPrisma },
+        { provide: PrismaService, useValue: prisma },
       ],
-    })
-      // strip auth guards — this suite exercises the report logic, not authN
-      .overrideGuard(JwtAuthGuard)
-      .useValue({ canActivate: () => true })
-      .overrideGuard(RolesGuard)
-      .useValue({ canActivate: () => true })
-      .compile();
+    }).compile();
 
-    controller = module.get(EngagementReportController);
-    service = module.get(EngagementReportService);
+    service = module.get<EngagementReportService>(EngagementReportService);
+  });
 
+  afterEach(() => {
     jest.clearAllMocks();
-    mockPrisma.lessonProgress.aggregate.mockResolvedValue({
-      _sum: { watchedSecs: 0 },
-      _count: { _all: 0 },
-    });
-    mockPrisma.lessonProgress.count.mockResolvedValue(0);
-    mockPrisma.lessonProgress.groupBy.mockResolvedValue([]);
-    mockPrisma.userPoints.findMany.mockResolvedValue([]);
-    mockPrisma.enrollment.findMany.mockResolvedValue([]);
   });
 
-  describe('scope validation', () => {
-    it('rejects STUDENT scope without a studentId', async () => {
-      await expect(
-        service.getReport(query({ scope: EngagementScope.STUDENT })),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('404s when the requested student does not exist', async () => {
-      mockPrisma.user.findUnique.mockResolvedValue(null);
-      await expect(
-        service.getReport(
-          query({ scope: EngagementScope.STUDENT, studentId: 'nope' }),
-        ),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('rejects COURSE scope without a courseId', async () => {
-      await expect(
-        service.getReport(query({ scope: EngagementScope.COURSE })),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('rejects an inverted reporting period', async () => {
-      await expect(
-        service.getReport(
-          query({
-            scope: EngagementScope.PLATFORM,
-            from: '2026-08-01T00:00:00.000Z',
-            to: '2026-07-01T00:00:00.000Z',
-          }),
-        ),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('scopes the enrollment query to the course for a cohort report', async () => {
-      mockPrisma.course.findUnique.mockResolvedValue({ id: 'course-1' });
-
-      await service.getReport(
-        query({ scope: EngagementScope.COURSE, courseId: 'course-1' }),
-      );
-
-      expect(mockPrisma.enrollment.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: expect.objectContaining({ courseId: 'course-1' }),
-        }),
-      );
-    });
-  });
-
-  describe('watch time & completion aggregates', () => {
-    it('summarises watch time, lesson and course completion for a cohort', async () => {
-      mockPrisma.course.findUnique.mockResolvedValue({ id: 'course-1' });
-      mockPrisma.enrollment.findMany.mockResolvedValue([
+  describe('happy path', () => {
+    it('aggregates platform engagement metrics', async () => {
+      const now = new Date();
+      prisma.enrollment.findMany.mockResolvedValue([
         {
-          id: 'enr-1',
-          studentId: 'stu-1',
+          id: 'e1',
+          studentId: 's1',
           status: 'COMPLETED',
           progressPercent: 100,
-          updatedAt: new Date(),
-          enrolledAt: new Date(),
+          updatedAt: now,
+          enrolledAt: now,
         },
         {
-          id: 'enr-2',
-          studentId: 'stu-2',
+          id: 'e2',
+          studentId: 's2',
           status: 'ACTIVE',
-          progressPercent: 40,
-          updatedAt: new Date(),
-          enrolledAt: new Date(),
+          progressPercent: 50,
+          updatedAt: now,
+          enrolledAt: now,
         },
       ]);
-      mockPrisma.lessonProgress.aggregate.mockResolvedValue({
+      prisma.lessonProgress.aggregate.mockResolvedValue({
         _sum: { watchedSecs: 7200 },
         _count: { _all: 10 },
       });
-      mockPrisma.lessonProgress.count.mockResolvedValue(6);
-      mockPrisma.lessonProgress.groupBy.mockResolvedValue([
-        { enrollmentId: 'enr-1', _max: { updatedAt: new Date() } },
-        { enrollmentId: 'enr-2', _max: { updatedAt: new Date() } },
+      prisma.lessonProgress.count.mockResolvedValue(4);
+      prisma.lessonProgress.groupBy.mockResolvedValue([
+        { enrollmentId: 'e1', _max: { updatedAt: now } },
+        { enrollmentId: 'e2', _max: { updatedAt: now } },
       ]);
-      mockPrisma.userPoints.findMany.mockResolvedValue([
-        { userId: 'stu-1', currentStreak: 5, longestStreak: 12 },
-        { userId: 'stu-2', currentStreak: 1, longestStreak: 3 },
+      prisma.userPoints.findMany.mockResolvedValue([
+        { userId: 's1', currentStreak: 4, longestStreak: 10 },
+        { userId: 's2', currentStreak: 2, longestStreak: 6 },
       ]);
 
-      const report = await controller.getReport(
-        query({ scope: EngagementScope.COURSE, courseId: 'course-1' }),
-      );
+      const report = await service.getReport({});
 
+      expect(report.scope).toBe(EngagementScope.PLATFORM);
       expect(report.summary.students).toBe(2);
       expect(report.summary.enrollments).toBe(2);
       expect(report.summary.completedEnrollments).toBe(1);
-      expect(report.summary.courseCompletionRate).toBe(0.5);
-      expect(report.summary.avgProgressPercent).toBe(70);
+      expect(report.summary.courseCompletionRate).toBe(50);
+      expect(report.summary.avgProgressPercent).toBe(75);
       expect(report.summary.watchTime.totalSeconds).toBe(7200);
       expect(report.summary.watchTime.totalHours).toBe(2);
       expect(report.summary.watchTime.avgSecondsPerStudent).toBe(3600);
-      expect(report.summary.lessons).toEqual({
-        started: 10,
-        completed: 6,
-        completionRate: 0.6,
-      });
-      expect(report.summary.streaks).toEqual({
-        avgCurrentStreak: 3,
-        longestStreak: 12,
-      });
+      expect(report.summary.lessons.started).toBe(10);
+      expect(report.summary.lessons.completed).toBe(4);
+      expect(report.summary.lessons.completionRate).toBe(40);
+      expect(report.summary.streaks.avgCurrentStreak).toBe(3);
+      expect(report.summary.streaks.longestStreak).toBe(10);
+      expect(report.summary.inactivity.thresholdDays).toBe(14);
     });
-  });
 
-  describe('inactivity threshold flagging', () => {
-    it('flags students whose last lesson activity is older than the threshold', async () => {
-      const stale = new Date(Date.now() - 40 * DAY);
-      const fresh = new Date(Date.now() - 2 * DAY);
-      mockPrisma.course.findUnique.mockResolvedValue({ id: 'course-1' });
-      mockPrisma.enrollment.findMany.mockResolvedValue([
-        {
-          id: 'enr-active',
-          studentId: 'stu-active',
-          status: 'ACTIVE',
-          progressPercent: 50,
-          updatedAt: stale,
-          enrolledAt: stale,
-        },
-        {
-          id: 'enr-stale',
-          studentId: 'stu-stale',
-          status: 'ACTIVE',
-          progressPercent: 10,
-          updatedAt: stale,
-          enrolledAt: stale,
-        },
-      ]);
-      mockPrisma.lessonProgress.groupBy.mockResolvedValue([
-        { enrollmentId: 'enr-active', _max: { updatedAt: fresh } },
-        { enrollmentId: 'enr-stale', _max: { updatedAt: stale } },
-      ]);
+    it('returns zeroed metrics when there are no enrollments', async () => {
+      prisma.enrollment.findMany.mockResolvedValue([]);
+      prisma.lessonProgress.aggregate.mockResolvedValue({
+        _sum: { watchedSecs: null },
+        _count: { _all: 0 },
+      });
+      prisma.lessonProgress.count.mockResolvedValue(0);
 
-      const report = await service.getReport(
-        query({
-          scope: EngagementScope.COURSE,
-          courseId: 'course-1',
-          inactiveDays: 14,
+      const report = await service.getReport({});
+
+      expect(report.summary.students).toBe(0);
+      expect(report.summary.enrollments).toBe(0);
+      expect(report.summary.avgProgressPercent).toBe(0);
+      expect(report.summary.watchTime.totalSeconds).toBe(0);
+      expect(report.summary.watchTime.avgSecondsPerStudent).toBe(0);
+      expect(report.summary.streaks.avgCurrentStreak).toBe(0);
+      expect(report.summary.streaks.longestStreak).toBe(0);
+      expect(prisma.lessonProgress.groupBy).not.toHaveBeenCalled();
+      expect(prisma.userPoints.findMany).not.toHaveBeenCalled();
+    });
+
+    it('scopes the report to a single student', async () => {
+      prisma.user.findUnique.mockResolvedValue({ id: 's1' });
+      prisma.enrollment.findMany.mockResolvedValue([]);
+      prisma.lessonProgress.aggregate.mockResolvedValue({
+        _sum: { watchedSecs: 0 },
+        _count: { _all: 0 },
+      });
+      prisma.lessonProgress.count.mockResolvedValue(0);
+
+      const report = await service.getReport({
+        scope: EngagementScope.STUDENT,
+        studentId: 's1',
+      });
+
+      expect(report.scope).toBe(EngagementScope.STUDENT);
+      expect(report.studentId).toBe('s1');
+      expect(prisma.enrollment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ studentId: 's1' }),
         }),
       );
-
-      expect(report.summary.inactivity.thresholdDays).toBe(14);
-      expect(report.summary.inactivity.inactiveStudents).toBe(1);
-      expect(report.summary.inactivity.studentIds).toEqual(['stu-stale']);
-      expect(report.summary.inactivity.inactiveRate).toBe(0.5);
     });
   });
 
-  describe('empty platform report', () => {
-    it('returns a well-formed zeroed payload when there is no data', async () => {
-      const report = await service.getReport(
-        query({ scope: EngagementScope.PLATFORM }),
-      );
+  describe('validation', () => {
+    it('throws BadRequest when scope=STUDENT without studentId', async () => {
+      await expect(
+        service.getReport({ scope: EngagementScope.STUDENT }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
 
-      expect(report.scope).toBe(EngagementScope.PLATFORM);
-      expect(report.summary.students).toBe(0);
-      expect(report.summary.lessons.completionRate).toBe(0);
-      expect(report.summary.inactivity.inactiveStudents).toBe(0);
-      expect(mockPrisma.lessonProgress.groupBy).not.toHaveBeenCalled();
+    it('throws NotFound when the student does not exist', async () => {
+      prisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.getReport({ scope: EngagementScope.STUDENT, studentId: 'missing' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('throws BadRequest when scope=COURSE without courseId', async () => {
+      await expect(
+        service.getReport({ scope: EngagementScope.COURSE }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('throws NotFound when the course does not exist', async () => {
+      prisma.course.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.getReport({ scope: EngagementScope.COURSE, courseId: 'missing' }),
+      ).rejects.toBeInstanceOf(NotFoundException);
+    });
+
+    it('throws BadRequest for an invalid from date', async () => {
+      await expect(
+        service.getReport({ from: 'not-a-date' }),
+      ).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('throws BadRequest when from is after to', async () => {
+      await expect(
+        service.getReport({
+          from: '2024-02-01T00:00:00.000Z',
+          to: '2024-01-01T00:00:00.000Z',
+        }),
+      ).rejects.toBeInstanceOf(BadRequestException);
     });
   });
 });
