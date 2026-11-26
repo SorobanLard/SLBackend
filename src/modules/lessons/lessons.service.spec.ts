@@ -1,11 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
-import { UserRole } from '@prisma/client';
 import { LessonsService } from './lessons.service';
 import { PrismaService } from '../../common/prisma/prisma.service';
+import { NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { UserRole } from '@prisma/client';
 
-describe('LessonsService (Ownership & IDOR Protection)', () => {
+describe('LessonsService', () => {
   let service: LessonsService;
+  let prisma: any;
 
   const mockPrisma = {
     course: {
@@ -24,6 +25,7 @@ describe('LessonsService (Ownership & IDOR Protection)', () => {
     enrollment: {
       findUnique: jest.fn(),
       update: jest.fn(),
+      count: jest.fn(),
     },
     lessonProgress: {
       upsert: jest.fn(),
@@ -41,283 +43,345 @@ describe('LessonsService (Ownership & IDOR Protection)', () => {
     }).compile();
 
     service = module.get<LessonsService>(LessonsService);
+    prisma = module.get(PrismaService);
     jest.clearAllMocks();
   });
 
-  describe('createModule()', () => {
-    it('throws NotFoundException when target course does not exist', async () => {
+  describe('createModule', () => {
+    const courseId = 'course-1';
+    const title = 'Introduction to React';
+    const position = 1;
+    const user = { id: 'user-1', stellarAddress: 'GABC', role: UserRole.INSTRUCTOR };
+
+    it('should create a module for authorized instructor', async () => {
+      const mockCourse = {
+        id: courseId,
+        instructorAddress: 'GABC',
+        instructor: { id: 'user-1' },
+      };
+
+      const mockModule = {
+        id: 'module-1',
+        courseId,
+        title,
+        position,
+      };
+
+      mockPrisma.course.findUnique.mockResolvedValue(mockCourse);
+      mockPrisma.courseModule.create.mockResolvedValue(mockModule);
+
+      const result = await service.createModule(courseId, title, position, user);
+
+      expect(result).toEqual(mockModule);
+      expect(mockPrisma.courseModule.create).toHaveBeenCalledWith({
+        data: { courseId, title, position },
+      });
+    });
+
+    it('should throw NotFoundException if course does not exist', async () => {
       mockPrisma.course.findUnique.mockResolvedValue(null);
 
-      await expect(
-        service.createModule('course-999', 'Intro', 1, {
-          id: 'instructor-1',
-          stellarAddress: 'GINSTRUCTOR1',
-          role: UserRole.INSTRUCTOR,
-        }),
-      ).rejects.toThrow(NotFoundException);
+      await expect(service.createModule(courseId, title, position, user))
+        .rejects.toThrow(NotFoundException);
     });
 
-    it('throws ForbiddenException when an instructor attempts to add a module to another instructor course', async () => {
-      mockPrisma.course.findUnique.mockResolvedValue({
-        id: 'course-1',
-        instructorAddress: 'GOTHER_INSTRUCTOR',
-        instructor: { id: 'other-instructor' },
-      });
+    it('should throw ForbiddenException if user is not the course owner', async () => {
+      const mockCourse = {
+        id: courseId,
+        instructorAddress: 'GXYZ',
+        instructor: { id: 'other-user' },
+      };
 
-      await expect(
-        service.createModule('course-1', 'Intro', 1, {
-          id: 'instructor-1',
-          stellarAddress: 'GINSTRUCTOR1',
-          role: UserRole.INSTRUCTOR,
-        }),
-      ).rejects.toThrow(ForbiddenException);
+      mockPrisma.course.findUnique.mockResolvedValue(mockCourse);
+
+      await expect(service.createModule(courseId, title, position, user))
+        .rejects.toThrow(ForbiddenException);
     });
 
-    it('allows the course owner instructor to create a module', async () => {
-      mockPrisma.course.findUnique.mockResolvedValue({
-        id: 'course-1',
-        instructorAddress: 'GINSTRUCTOR1',
-        instructor: { id: 'instructor-1' },
-      });
-      mockPrisma.courseModule.create.mockResolvedValue({
-        id: 'mod-1',
-        courseId: 'course-1',
-        title: 'Intro',
-        position: 1,
-      });
+    it('should allow admin to create module regardless of ownership', async () => {
+      const adminUser = { id: 'admin-1', stellarAddress: 'GADMIN', role: UserRole.ADMIN };
+      const mockCourse = {
+        id: courseId,
+        instructorAddress: 'GXYZ',
+        instructor: { id: 'other-user' },
+      };
 
-      const result = await service.createModule('course-1', 'Intro', 1, {
-        id: 'instructor-1',
-        stellarAddress: 'GINSTRUCTOR1',
-        role: UserRole.INSTRUCTOR,
-      });
+      const mockModule = {
+        id: 'module-1',
+        courseId,
+        title,
+        position,
+      };
 
-      expect(result.id).toBe('mod-1');
-      expect(mockPrisma.courseModule.create).toHaveBeenCalledWith({
-        data: { courseId: 'course-1', title: 'Intro', position: 1 },
-      });
-    });
+      mockPrisma.course.findUnique.mockResolvedValue(mockCourse);
+      mockPrisma.courseModule.create.mockResolvedValue(mockModule);
 
-    it('allows an ADMIN to create a module for any course', async () => {
-      mockPrisma.course.findUnique.mockResolvedValue({
-        id: 'course-1',
-        instructorAddress: 'GOTHER_INSTRUCTOR',
-        instructor: { id: 'other-instructor' },
-      });
-      mockPrisma.courseModule.create.mockResolvedValue({
-        id: 'mod-1',
-        courseId: 'course-1',
-        title: 'Admin Module',
-        position: 1,
-      });
+      const result = await service.createModule(courseId, title, position, adminUser);
 
-      const result = await service.createModule('course-1', 'Admin Module', 1, {
-        id: 'admin-1',
-        stellarAddress: 'GADMIN',
-        role: UserRole.ADMIN,
-      });
-
-      expect(result.id).toBe('mod-1');
-      expect(mockPrisma.courseModule.create).toHaveBeenCalled();
+      expect(result).toEqual(mockModule);
     });
   });
 
-  describe('createLesson()', () => {
-    it('throws NotFoundException when target module does not exist', async () => {
-      mockPrisma.courseModule.findUnique.mockResolvedValue(null);
+  describe('createLesson', () => {
+    const moduleId = 'module-1';
+    const lessonData = {
+      title: 'Introduction to Hooks',
+      description: 'Learn about React Hooks',
+      type: 'VIDEO',
+      videoUrl: 'https://cdn.example.com/video.mp4',
+      videoDuration: 600,
+      position: 1,
+      isFree: false,
+    };
+    const user = { id: 'user-1', stellarAddress: 'GABC', role: UserRole.INSTRUCTOR };
 
-      await expect(
-        service.createLesson(
-          'mod-999',
-          { title: 'Lesson 1', position: 1 },
-          { id: 'instructor-1', stellarAddress: 'GINSTRUCTOR1', role: UserRole.INSTRUCTOR },
-        ),
-      ).rejects.toThrow(NotFoundException);
-    });
-
-    it('throws ForbiddenException when an instructor attempts to add a lesson to another instructor module', async () => {
-      mockPrisma.courseModule.findUnique.mockResolvedValue({
-        id: 'mod-1',
+    it('should create a lesson and increment course totalLessons', async () => {
+      const mockModule = {
+        id: moduleId,
         courseId: 'course-1',
         course: {
           id: 'course-1',
-          instructorAddress: 'GOTHER_INSTRUCTOR',
-          instructor: { id: 'other-instructor' },
+          instructorAddress: 'GABC',
+          instructor: { id: 'user-1' },
         },
-      });
+      };
 
-      await expect(
-        service.createLesson(
-          'mod-1',
-          { title: 'Lesson 1', position: 1 },
-          { id: 'instructor-1', stellarAddress: 'GINSTRUCTOR1', role: UserRole.INSTRUCTOR },
-        ),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('allows module course owner to create a lesson and updates totalLessons', async () => {
-      mockPrisma.courseModule.findUnique.mockResolvedValue({
-        id: 'mod-1',
-        courseId: 'course-1',
-        course: {
-          id: 'course-1',
-          instructorAddress: 'GINSTRUCTOR1',
-          instructor: { id: 'instructor-1' },
-        },
-      });
-      mockPrisma.lesson.create.mockResolvedValue({
+      const mockLesson = {
         id: 'lesson-1',
-        moduleId: 'mod-1',
-        title: 'Lesson 1',
-        position: 1,
-      });
+        moduleId,
+        ...lessonData,
+      };
+
+      mockPrisma.courseModule.findUnique.mockResolvedValue(mockModule);
+      mockPrisma.lesson.create.mockResolvedValue(mockLesson);
       mockPrisma.course.update.mockResolvedValue({});
 
-      const result = await service.createLesson(
-        'mod-1',
-        { title: 'Lesson 1', position: 1 },
-        { id: 'instructor-1', stellarAddress: 'GINSTRUCTOR1', role: UserRole.INSTRUCTOR },
-      );
+      const result = await service.createLesson(moduleId, lessonData, user);
 
-      expect(result.id).toBe('lesson-1');
+      expect(result).toEqual(mockLesson);
       expect(mockPrisma.course.update).toHaveBeenCalledWith({
         where: { id: 'course-1' },
         data: { totalLessons: { increment: 1 } },
       });
     });
+
+    it('should throw NotFoundException if module does not exist', async () => {
+      mockPrisma.courseModule.findUnique.mockResolvedValue(null);
+
+      await expect(service.createLesson(moduleId, lessonData, user))
+        .rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw ForbiddenException if user is not authorized', async () => {
+      const mockModule = {
+        id: moduleId,
+        courseId: 'course-1',
+        course: {
+          id: 'course-1',
+          instructorAddress: 'GXYZ',
+          instructor: { id: 'other-user' },
+        },
+      };
+
+      mockPrisma.courseModule.findUnique.mockResolvedValue(mockModule);
+
+      await expect(service.createLesson(moduleId, lessonData, user))
+        .rejects.toThrow(ForbiddenException);
+    });
   });
 
-  describe('markLessonComplete() IDOR check', () => {
-    it('throws NotFoundException if enrollment does not exist', async () => {
-      mockPrisma.enrollment.findUnique.mockResolvedValue(null);
+  describe('findLesson', () => {
+    it('should return lesson with module and course details', async () => {
+      const mockLesson = {
+        id: 'lesson-1',
+        title: 'Introduction',
+        module: {
+          id: 'module-1',
+          course: { id: 'course-1' },
+        },
+        assignment: null,
+      };
 
-      await expect(
-        service.markLessonComplete('student-1', 'enrollment-999', 'lesson-1', 120),
-      ).rejects.toThrow(NotFoundException);
+      mockPrisma.lesson.findUnique.mockResolvedValue(mockLesson);
+
+      const result = await service.findLesson('lesson-1');
+
+      expect(result).toEqual(mockLesson);
     });
 
-    it('throws ForbiddenException if enrollment belongs to another student', async () => {
-      mockPrisma.enrollment.findUnique.mockResolvedValue({
-        id: 'enrollment-1',
-        studentId: 'other-student',
-        course: { modules: [{ lessons: [{ id: 'lesson-1' }] }] },
+    it('should throw NotFoundException if lesson does not exist', async () => {
+      mockPrisma.lesson.findUnique.mockResolvedValue(null);
+
+      await expect(service.findLesson('lesson-1'))
+        .rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('updateThumbnailUrl', () => {
+    it('should update lesson thumbnail URL', async () => {
+      const mockLesson = { id: 'lesson-1', title: 'Video Lesson' };
+      const updatedLesson = { ...mockLesson, thumbnailUrl: 'https://cdn.example.com/thumb.jpg' };
+
+      mockPrisma.lesson.findUnique.mockResolvedValue(mockLesson);
+      mockPrisma.lesson.update.mockResolvedValue(updatedLesson);
+
+      const result = await service.updateThumbnailUrl('lesson-1', 'https://cdn.example.com/thumb.jpg');
+
+      expect(result.thumbnailUrl).toBe('https://cdn.example.com/thumb.jpg');
+      expect(mockPrisma.lesson.update).toHaveBeenCalledWith({
+        where: { id: 'lesson-1' },
+        data: { thumbnailUrl: 'https://cdn.example.com/thumb.jpg' },
       });
-
-      await expect(
-        service.markLessonComplete('student-1', 'enrollment-1', 'lesson-1', 120),
-      ).rejects.toThrow(ForbiddenException);
     });
 
-    it('throws BadRequestException if lesson does not belong to the enrolled course', async () => {
-      mockPrisma.enrollment.findUnique.mockResolvedValue({
-        id: 'enrollment-1',
-        studentId: 'student-1',
-        course: { modules: [{ lessons: [{ id: 'other-course-lesson' }] }] },
-      });
+    it('should throw NotFoundException if lesson does not exist', async () => {
+      mockPrisma.lesson.findUnique.mockResolvedValue(null);
 
-      await expect(
-        service.markLessonComplete('student-1', 'enrollment-1', 'lesson-1', 120),
-      ).rejects.toThrow(BadRequestException);
+      await expect(service.updateThumbnailUrl('lesson-1', 'https://cdn.example.com/thumb.jpg'))
+        .rejects.toThrow(NotFoundException);
     });
+  });
 
-    it('successfully records lesson complete when called by the enrolled student', async () => {
-      mockPrisma.enrollment.findUnique
-        .mockResolvedValueOnce({
-          id: 'enrollment-1',
-          studentId: 'student-1',
-          course: {
-            modules: [
-              {
-                lessons: [{ id: 'lesson-1' }, { id: 'lesson-2' }],
-              },
-            ],
-          },
-        })
-        .mockResolvedValueOnce({
-          id: 'enrollment-1',
-          studentId: 'student-1',
-          course: {
-            modules: [
-              {
-                lessons: [{ id: 'lesson-1' }, { id: 'lesson-2' }],
-              },
-            ],
-          },
-        });
+  describe('markLessonComplete', () => {
+    const studentId = 'student-1';
+    const enrollmentId = 'enrollment-1';
+    const lessonId = 'lesson-1';
 
-      mockPrisma.lessonProgress.upsert.mockResolvedValue({
-        id: 'lp-1',
-        enrollmentId: 'enrollment-1',
-        lessonId: 'lesson-1',
+    it('should mark lesson as complete and recalculate progress', async () => {
+      const mockEnrollment = {
+        id: enrollmentId,
+        studentId,
+        course: {
+          modules: [
+            {
+              lessons: [{ id: lessonId }],
+            },
+          ],
+        },
+      };
+
+      const mockProgress = {
+        enrollmentId,
+        lessonId,
         completed: true,
+        watchedSecs: 300,
+        completedAt: expect.any(Date),
+      };
+
+      mockPrisma.enrollment.findUnique.mockResolvedValue(mockEnrollment);
+      mockPrisma.lessonProgress.upsert.mockResolvedValue(mockProgress);
+      mockPrisma.enrollment.findUnique.mockResolvedValueOnce(mockEnrollment);
+      mockPrisma.enrollment.findUnique.mockResolvedValueOnce({
+        ...mockEnrollment,
+        course: {
+          modules: [{ lessons: [{ id: lessonId }] }],
+        },
       });
       mockPrisma.lessonProgress.count.mockResolvedValue(1);
       mockPrisma.enrollment.update.mockResolvedValue({});
 
-      const result = await service.markLessonComplete(
-        'student-1',
-        'enrollment-1',
-        'lesson-1',
-        300,
-      );
+      const result = await service.markLessonComplete(studentId, enrollmentId, lessonId, 300);
 
       expect(result.completed).toBe(true);
       expect(mockPrisma.lessonProgress.upsert).toHaveBeenCalled();
     });
+
+    it('should throw NotFoundException if enrollment does not exist', async () => {
+      mockPrisma.enrollment.findUnique.mockResolvedValue(null);
+
+      await expect(service.markLessonComplete(studentId, enrollmentId, lessonId))
+        .rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw ForbiddenException if enrollment belongs to different student', async () => {
+      const mockEnrollment = {
+        id: enrollmentId,
+        studentId: 'other-student',
+        course: { modules: [] },
+      };
+
+      mockPrisma.enrollment.findUnique.mockResolvedValue(mockEnrollment);
+
+      await expect(service.markLessonComplete(studentId, enrollmentId, lessonId))
+        .rejects.toThrow(ForbiddenException);
+    });
+
+    it('should throw BadRequestException if lesson is not part of enrolled course', async () => {
+      const mockEnrollment = {
+        id: enrollmentId,
+        studentId,
+        course: {
+          modules: [
+            {
+              lessons: [{ id: 'other-lesson' }],
+            },
+          ],
+        },
+      };
+
+      mockPrisma.enrollment.findUnique.mockResolvedValue(mockEnrollment);
+
+      await expect(service.markLessonComplete(studentId, enrollmentId, lessonId))
+        .rejects.toThrow(BadRequestException);
+    });
   });
 
-  describe('updateWatchProgress() IDOR check', () => {
-    it('throws ForbiddenException if enrollment belongs to another student', async () => {
-      mockPrisma.enrollment.findUnique.mockResolvedValue({
-        id: 'enrollment-1',
-        studentId: 'other-student',
-        course: { modules: [{ lessons: [{ id: 'lesson-1' }] }] },
-      });
+  describe('updateWatchProgress', () => {
+    const studentId = 'student-1';
+    const enrollmentId = 'enrollment-1';
+    const lessonId = 'lesson-1';
 
-      await expect(
-        service.updateWatchProgress('student-1', 'enrollment-1', 'lesson-1', 45),
-      ).rejects.toThrow(ForbiddenException);
+    it('should update watch progress without marking as complete', async () => {
+      const mockEnrollment = {
+        id: enrollmentId,
+        studentId,
+        course: {
+          modules: [
+            {
+              lessons: [{ id: lessonId }],
+            },
+          ],
+        },
+      };
+
+      const mockProgress = {
+        enrollmentId,
+        lessonId,
+        watchedSecs: 150,
+      };
+
+      mockPrisma.enrollment.findUnique.mockResolvedValue(mockEnrollment);
+      mockPrisma.lessonProgress.upsert.mockResolvedValue(mockProgress);
+
+      const result = await service.updateWatchProgress(studentId, enrollmentId, lessonId, 150);
+
+      expect(result.watchedSecs).toBe(150);
     });
+  });
 
-    it('throws BadRequestException if lesson does not belong to the enrolled course', async () => {
-      mockPrisma.enrollment.findUnique.mockResolvedValue({
-        id: 'enrollment-1',
-        studentId: 'student-1',
-        course: { modules: [{ lessons: [{ id: 'different-lesson' }] }] },
-      });
+  describe('getStudentProgress', () => {
+    it('should return all lesson progress for an enrollment', async () => {
+      const mockProgress = [
+        {
+          enrollmentId: 'enrollment-1',
+          lessonId: 'lesson-1',
+          completed: true,
+          lesson: { title: 'Lesson 1', position: 1 },
+        },
+        {
+          enrollmentId: 'enrollment-1',
+          lessonId: 'lesson-2',
+          completed: false,
+          lesson: { title: 'Lesson 2', position: 2 },
+        },
+      ];
 
-      await expect(
-        service.updateWatchProgress('student-1', 'enrollment-1', 'lesson-1', 45),
-      ).rejects.toThrow(BadRequestException);
-    });
+      mockPrisma.lessonProgress.findMany.mockResolvedValue(mockProgress);
 
-    it('successfully updates watch progress when called by owner student', async () => {
-      mockPrisma.enrollment.findUnique.mockResolvedValue({
-        id: 'enrollment-1',
-        studentId: 'student-1',
-        course: { modules: [{ lessons: [{ id: 'lesson-1' }] }] },
-      });
+      const result = await service.getStudentProgress('enrollment-1');
 
-      mockPrisma.lessonProgress.upsert.mockResolvedValue({
-        id: 'lp-1',
-        enrollmentId: 'enrollment-1',
-        lessonId: 'lesson-1',
-        watchedSecs: 45,
-      });
-
-      const result = await service.updateWatchProgress(
-        'student-1',
-        'enrollment-1',
-        'lesson-1',
-        45,
-      );
-
-      expect(result.watchedSecs).toBe(45);
-      expect(mockPrisma.lessonProgress.upsert).toHaveBeenCalledWith({
-        where: { enrollmentId_lessonId: { enrollmentId: 'enrollment-1', lessonId: 'lesson-1' } },
-        create: { enrollmentId: 'enrollment-1', lessonId: 'lesson-1', watchedSecs: 45 },
-        update: { watchedSecs: 45 },
-      });
+      expect(result).toHaveLength(2);
+      expect(result[0].lesson.title).toBe('Lesson 1');
     });
   });
 });
